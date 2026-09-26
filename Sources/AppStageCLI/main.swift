@@ -102,6 +102,9 @@ struct RecordCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Output frame rate.")
     var frameRate: Int = 60
 
+    @Flag(name: .long, help: "Keep an application launched by AppStage running after capture finishes. Pre-existing applications are never terminated.")
+    var keepAppRunning = false
+
     func run() async throws {
         guard (1...600).contains(duration) else {
             throw ValidationError("--duration must be between 1 and 600 seconds.")
@@ -147,34 +150,46 @@ struct RecordCommand: AsyncParsableCommand {
             )
         )
 
-        let launchedApplication = try await launch(
-            applicationURL,
-            arguments: [
-                "--appstage-scenario", scenario,
-                "--appstage-autoplay",
-                "--appstage-window", "1100x760",
-            ]
-        )
-
-        let window = try await waitForWindow(
-            bundleIdentifier: applicationBundleID,
-            processIdentifier: launchedApplication.processIdentifier
-        )
-        try await Task.sleep(for: .seconds(1))
-        let targetDisplay = try await display(for: window)
-        let recorder = StageVideoRecorder(
-            window: window,
-            display: targetDisplay,
-            configuration: captureConfiguration,
-            outputURL: outputURL
-        )
-        try await recorder.start()
+        let captureTask = Task {
+            let session = try await StageAppSession.open(
+                appURL: applicationURL,
+                bundleIdentifier: applicationBundleID,
+                arguments: [
+                    "--appstage-scenario", scenario,
+                    "--appstage-autoplay",
+                    "--appstage-window", "1100x760",
+                ],
+                keepAppRunning: keepAppRunning
+            )
+            try await session.performCapture {
+                let window = try await waitForWindow(
+                    bundleIdentifier: session.bundleIdentifier,
+                    processIdentifier: session.processIdentifier
+                )
+                try await Task.sleep(for: .seconds(1))
+                let targetDisplay = try await display(for: window)
+                let recorder = StageVideoRecorder(
+                    window: window,
+                    display: targetDisplay,
+                    configuration: captureConfiguration,
+                    outputURL: outputURL
+                )
+                do {
+                    try await recorder.start()
+                    try await Task.sleep(for: .seconds(duration))
+                    try await recorder.stop()
+                } catch {
+                    try? await recorder.stop()
+                    throw error
+                }
+            }
+        }
+        let signalCancellation = StageRecordSignalCancellation(task: captureTask)
+        defer { signalCancellation.cancel() }
         do {
-            try await Task.sleep(for: .seconds(duration))
-            try await recorder.stop()
-        } catch {
-            try? await recorder.stop()
-            throw error
+            try await captureTask.value
+        } catch is CancellationError {
+            throw ValidationError("Recording cancelled.")
         }
 
         print("Wrote \(duration)s MOV to \(outputURL.path)")
@@ -224,13 +239,4 @@ private func waitForWindow(
         }
     }
     throw ValidationError("Timed out waiting for a visible window from \(bundleIdentifier).")
-}
-
-@MainActor
-private func launch(_ applicationURL: URL, arguments: [String]) async throws -> NSRunningApplication {
-    let configuration = NSWorkspace.OpenConfiguration()
-    configuration.activates = true
-    configuration.createsNewApplicationInstance = true
-    configuration.arguments = arguments
-    return try await NSWorkspace.shared.openApplication(at: applicationURL, configuration: configuration)
 }

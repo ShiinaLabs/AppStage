@@ -21,6 +21,16 @@ final class AppStageCLITests: XCTestCase {
         XCTAssertTrue(result.standardOutput.contains("--duration"))
     }
 
+    func testRecordHelpExplainsKeepAppRunningAndPreexistingOwnership() throws {
+        let result = try runCLI(["record", "--help"])
+
+        XCTAssertEqual(result.status, 0, result.standardError)
+        XCTAssertTrue(result.standardOutput.contains("--keep-app-running"))
+        XCTAssertTrue(result.standardOutput.contains("Keep an application launched by AppStage running"))
+        XCTAssertTrue(result.standardOutput.contains("Pre-existing applications are"))
+        XCTAssertTrue(result.standardOutput.contains("never terminated."))
+    }
+
     func testSnapshotHelpIncludesBundleIdentifierAndOutputOptions() throws {
         let result = try runCLI(["snapshot", "--help"])
 
