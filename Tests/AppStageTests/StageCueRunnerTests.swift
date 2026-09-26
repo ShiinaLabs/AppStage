@@ -303,9 +303,75 @@ final class StageCueRunnerTests: XCTestCase {
         _ = await iterator.next()
         runner.stop()
         release?.resume()
-        _ = await drive.result
+        do {
+            try await drive.value
+            XCTFail("Expected the stopped drive to finish with cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
 
         XCTAssertEqual(laterCount, 0)
+        XCTAssertEqual(runner.state, .ready)
+    }
+
+    func testCooperativeHandlerCancellationDoesNotFailRunner() async throws {
+        let playback = StagePlayback(clock: TestClock())
+        let registry = StageActionRegistry()
+        var release: CheckedContinuation<Void, Never>?
+        let started = AsyncStream<Void>.makeStream()
+        try registry.register(StageActionID("wait")) { _ in
+            started.continuation.yield()
+            await withCheckedContinuation { release = $0 }
+            try Task.checkCancellation()
+        }
+        let runner = StageCueRunner(
+            scenario: .init(id: .init("sample"), duration: .seconds(1), cues: [
+                .init(at: .zero, action: .init(id: .init("wait"))),
+            ]), playback: playback, registry: registry
+        )
+
+        await playback.play()
+        let drive = runner.start()
+        var iterator = started.stream.makeAsyncIterator()
+        _ = await iterator.next()
+        runner.stop()
+        release?.resume()
+        do {
+            try await drive.value
+            XCTFail("Expected cooperative cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertEqual(runner.state, .ready)
+    }
+
+    func testStoppingDriveAfterFinalHandlerStartsStillReportsCancellation() async throws {
+        let playback = StagePlayback(clock: TestClock())
+        let registry = StageActionRegistry()
+        var release: CheckedContinuation<Void, Never>?
+        let started = AsyncStream<Void>.makeStream()
+        try registry.register(StageActionID("wait")) { _ in
+            started.continuation.yield()
+            await withCheckedContinuation { release = $0 }
+        }
+        let runner = StageCueRunner(
+            scenario: .init(id: .init("sample"), duration: .seconds(1), cues: [
+                .init(at: .zero, action: .init(id: .init("wait"))),
+            ]), playback: playback, registry: registry
+        )
+
+        await playback.play()
+        let drive = runner.start()
+        var iterator = started.stream.makeAsyncIterator()
+        _ = await iterator.next()
+        runner.stop()
+        release?.resume()
+        do {
+            try await drive.value
+            XCTFail("Expected cancellation after the final handler returns")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
         XCTAssertEqual(runner.state, .ready)
     }
 

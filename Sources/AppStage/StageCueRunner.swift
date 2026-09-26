@@ -40,7 +40,8 @@ public final class StageCueRunner {
                 if driveGeneration == generation { driveTask = nil }
             }
             try await runDueCues()
-            while !Task.isCancelled {
+            while true {
+                try Task.checkCancellation()
                 try await playback.sleep(for: .milliseconds(10))
                 try await runDueCues()
             }
@@ -99,6 +100,9 @@ public final class StageCueRunner {
                 try await registry.execute(action)
                 nextCueIndex += 1
             } catch {
+                if error is CancellationError, Task.isCancelled {
+                    throw error
+                }
                 failure = error
                 state = .failed
                 throw error
