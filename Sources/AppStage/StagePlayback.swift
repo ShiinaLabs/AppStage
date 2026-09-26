@@ -8,6 +8,8 @@ public actor StagePlayback {
     private var currentRate: Double = 1
 
     public private(set) var state: StagePlaybackState = .stopped
+    /// Increments on every reset so timeline consumers can re-arm after a reset.
+    public private(set) var resetGeneration: UInt64 = 0
 
     public var position: Duration {
         guard state == .playing else { return storedPosition }
@@ -42,6 +44,7 @@ public actor StagePlayback {
     }
 
     public func reset() {
+        resetGeneration &+= 1
         storedPosition = .zero
         anchorInstant = clock.now
         state = .stopped
