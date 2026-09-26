@@ -3,7 +3,7 @@ public enum StageCueRunnerState: Equatable, Sendable {
     case failed
 }
 
-/// Runs due cues when the caller advances the playback timeline.
+/// Runs semantic cues against playback, either on demand or from an automatic drive.
 @MainActor
 public final class StageCueRunner {
     private let playback: StagePlayback
@@ -13,6 +13,9 @@ public final class StageCueRunner {
     private var observedResetGeneration: UInt64?
     private var failure: Error?
     private var isRunning = false
+    private var waitingCallers: [CheckedContinuation<Void, Error>] = []
+    private var driveTask: Task<Void, Error>?
+    private var driveGeneration: UInt64 = 0
 
     public private(set) var state: StageCueRunnerState = .ready
 
@@ -25,12 +28,57 @@ public final class StageCueRunner {
         }.map(\.element)
     }
 
-    /// Executes each due cue once. Call after advancing playback or resuming it.
-    public func runDueCues() async throws {
-        guard !isRunning else { return }
-        isRunning = true
-        defer { isRunning = false }
+    /// Starts a cancellable drive using playback's injected clock. Repeated starts return the current task.
+    /// Await the returned task to observe handler failures; call `stop()` to end the drive.
+    @discardableResult
+    public func start() -> Task<Void, Error> {
+        if let driveTask { return driveTask }
+        driveGeneration &+= 1
+        let generation = driveGeneration
+        let task = Task { [self] in
+            defer {
+                if driveGeneration == generation { driveTask = nil }
+            }
+            try await runDueCues()
+            while !Task.isCancelled {
+                try await playback.sleep(for: .milliseconds(10))
+                try await runDueCues()
+            }
+        }
+        driveTask = task
+        return task
+    }
 
+    /// Cancels the automatic drive. Its returned task then completes with cancellation.
+    public func stop() {
+        driveGeneration &+= 1
+        driveTask?.cancel()
+        driveTask = nil
+    }
+
+    /// Executes each due cue once. Concurrent callers await the same in-flight pass and error.
+    public func runDueCues() async throws {
+        if isRunning {
+            try await withCheckedThrowingContinuation { waitingCallers.append($0) }
+            return
+        }
+        isRunning = true
+        do {
+            try await executeDueCues()
+            isRunning = false
+            let callers = waitingCallers
+            waitingCallers.removeAll()
+            callers.forEach { $0.resume() }
+        } catch {
+            isRunning = false
+            let callers = waitingCallers
+            waitingCallers.removeAll()
+            callers.forEach { $0.resume(throwing: error) }
+            throw error
+        }
+    }
+
+    private func executeDueCues() async throws {
         let generation = await playback.resetGeneration
         if let observedResetGeneration, generation != observedResetGeneration {
             nextCueIndex = 0
@@ -43,6 +91,7 @@ public final class StageCueRunner {
         guard await playback.state == .playing else { return }
         let position = await playback.position
         while nextCueIndex < cues.count && cues[nextCueIndex].at <= position {
+            try Task.checkCancellation()
             guard await playback.state == .playing,
                   await playback.resetGeneration == generation else { return }
             let action = cues[nextCueIndex].action

@@ -66,6 +66,11 @@ public actor StagePlayback {
         currentRate = rate
     }
 
+    /// Sleeps on the same injectable clock that advances playback.
+    func sleep(for duration: Duration) async throws {
+        try await clock.sleep(for: duration)
+    }
+
     private func position(from base: Duration, elapsed: Duration, rate: Double) -> Duration {
         guard elapsed != .zero else { return base }
         return adding(base, scaled(elapsed, by: rate))

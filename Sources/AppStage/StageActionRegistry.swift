@@ -6,7 +6,7 @@ public enum StageActionRegistryError: Error, Equatable, Sendable {
 /// An instance-owned collection of semantic action handlers.
 @MainActor
 public final class StageActionRegistry {
-    public typealias Handler = @MainActor (StageAction) async throws -> Void
+    public typealias Handler = @MainActor @Sendable (StageAction) async throws -> Void
     private var handlers: [StageActionID: Handler] = [:]
 
     public init() {}

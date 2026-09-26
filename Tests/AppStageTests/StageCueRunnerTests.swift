@@ -178,12 +178,135 @@ final class StageCueRunnerTests: XCTestCase {
         let first = Task { try await runner.runDueCues() }
         var iterator = started.stream.makeAsyncIterator()
         _ = await iterator.next()
-        let second = Task { try await runner.runDueCues() }
-        try await second.value
+        var secondFinished = false
+        let second = Task {
+            try await runner.runDueCues()
+            secondFinished = true
+        }
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertFalse(secondFinished, "A second caller must await the in-flight handler")
         release?.resume()
         try await first.value
+        try await second.value
 
         XCTAssertEqual(count, 1)
+    }
+
+    func testOverlappingRunsBothReceiveHandlerFailure() async throws {
+        enum ExpectedFailure: Error { case rejected }
+        let playback = StagePlayback(clock: TestClock())
+        let registry = StageActionRegistry()
+        var release: CheckedContinuation<Void, Never>?
+        let started = AsyncStream<Void>.makeStream()
+        try registry.register(StageActionID("reject")) { _ in
+            started.continuation.yield()
+            await withCheckedContinuation { release = $0 }
+            throw ExpectedFailure.rejected
+        }
+        let runner = StageCueRunner(
+            scenario: .init(id: .init("sample"), duration: .seconds(1), cues: [
+                .init(at: .zero, action: .init(id: .init("reject"))),
+            ]), playback: playback, registry: registry
+        )
+
+        await playback.play()
+        let first = Task { try await runner.runDueCues() }
+        var iterator = started.stream.makeAsyncIterator()
+        _ = await iterator.next()
+        let second = Task { try await runner.runDueCues() }
+        for _ in 0..<10 { await Task.yield() }
+        release?.resume()
+
+        for call in [first, second] {
+            do {
+                try await call.value
+                XCTFail("Expected shared handler failure")
+            } catch {
+                XCTAssertTrue(error is ExpectedFailure)
+            }
+        }
+        XCTAssertEqual(runner.state, .failed)
+    }
+
+    func testAutomaticDriveRunsCuesAsInjectedClockAdvancesAndCanBeStopped() async throws {
+        let clock = TestClock()
+        let playback = StagePlayback(clock: clock)
+        let registry = StageActionRegistry()
+        var received: [String] = []
+        try registry.register(StageActionID("mark")) { action in
+            received.append(action.arguments["value"] ?? "")
+        }
+        let runner = StageCueRunner(
+            scenario: .init(id: .init("sample"), duration: .seconds(3), cues: [
+                .init(at: .seconds(1), action: .init(id: .init("mark"), arguments: ["value": "one"])),
+                .init(at: .seconds(2), action: .init(id: .init("mark"), arguments: ["value": "two"])),
+            ]), playback: playback, registry: registry
+        )
+
+        let drive = runner.start()
+        await playback.play()
+        await clock.advance(by: .seconds(1))
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(received, ["one"])
+
+        runner.stop()
+        await clock.advance(by: .seconds(2))
+        _ = await drive.result
+        XCTAssertEqual(received, ["one"])
+    }
+
+    func testAutomaticDriveSurfacesHandlerErrorThroughTaskAndFailedState() async throws {
+        enum ExpectedFailure: Error { case rejected }
+        let clock = TestClock()
+        let playback = StagePlayback(clock: clock)
+        let registry = StageActionRegistry()
+        try registry.register(StageActionID("reject")) { _ in throw ExpectedFailure.rejected }
+        let runner = StageCueRunner(
+            scenario: .init(id: .init("sample"), duration: .seconds(2), cues: [
+                .init(at: .seconds(1), action: .init(id: .init("reject"))),
+            ]), playback: playback, registry: registry
+        )
+
+        let drive = runner.start()
+        await playback.play()
+        await clock.advance(by: .seconds(1))
+        do {
+            try await drive.value
+            XCTFail("Expected handler error")
+        } catch {
+            XCTAssertTrue(error is ExpectedFailure)
+        }
+        XCTAssertEqual(runner.state, .failed)
+    }
+
+    func testStoppingDriveDuringHandlerSkipsRemainingCues() async throws {
+        let playback = StagePlayback(clock: TestClock())
+        let registry = StageActionRegistry()
+        var release: CheckedContinuation<Void, Never>?
+        var laterCount = 0
+        let started = AsyncStream<Void>.makeStream()
+        try registry.register(StageActionID("wait")) { _ in
+            started.continuation.yield()
+            await withCheckedContinuation { release = $0 }
+        }
+        try registry.register(StageActionID("later")) { _ in laterCount += 1 }
+        let runner = StageCueRunner(
+            scenario: .init(id: .init("sample"), duration: .seconds(1), cues: [
+                .init(at: .zero, action: .init(id: .init("wait"))),
+                .init(at: .zero, action: .init(id: .init("later"))),
+            ]), playback: playback, registry: registry
+        )
+
+        await playback.play()
+        let drive = runner.start()
+        var iterator = started.stream.makeAsyncIterator()
+        _ = await iterator.next()
+        runner.stop()
+        release?.resume()
+        _ = await drive.result
+
+        XCTAssertEqual(laterCount, 0)
+        XCTAssertEqual(runner.state, .ready)
     }
 
     func testRegistryRejectsDuplicatesAndRemoveAllClearsHandlers() async throws {
