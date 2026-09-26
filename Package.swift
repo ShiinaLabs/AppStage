@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "AppStage", targets: ["AppStage"]),
         .library(name: "AppStageMac", targets: ["AppStageMac"]),
         .library(name: "AppStageCapture", targets: ["AppStageCapture"]),
+        .library(name: "AppStageControl", targets: ["AppStageControl"]),
         .executable(name: "appstage", targets: ["AppStageCLI"]),
     ],
     dependencies: [
@@ -24,6 +25,7 @@ let package = Package(
         ),
         .target(name: "AppStageMac"),
         .target(name: "AppStageCapture"),
+        .target(name: "AppStageControl", dependencies: ["AppStage"]),
         .executableTarget(
             name: "AppStageCLI",
             dependencies: [
@@ -44,6 +46,7 @@ let package = Package(
             name: "AppStageCaptureTests",
             dependencies: ["AppStageCapture"]
         ),
+        .testTarget(name: "AppStageControlTests", dependencies: ["AppStageControl"]),
         .testTarget(
             name: "AppStageMacTests",
             dependencies: ["AppStageMac"]
