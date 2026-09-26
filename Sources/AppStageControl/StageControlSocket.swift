@@ -85,16 +85,25 @@ actor StageControlSocket {
 }
 
 actor StageControlListener {
+    private let startSocket: @Sendable (StageControlSocket) async -> Void
     private var listener: NWListener?
-    private let queue = DispatchQueue(label: "appstage.control.listener")
+    private let queue: DispatchQueue
     private var readyWaiter: CheckedContinuation<UInt16, Error>?
     private var connectionWaiters: [CheckedContinuation<StageControlSocket, Error>] = []
     private var connections: [StageControlSocket] = []
     private var failure: StageControlError?
     private var cancelled = false
-    private var cancelledWaiter: CheckedContinuation<Void, Never>?
+    private var cancellationRequested = false
+    private var cancelledWaiters: [CheckedContinuation<Void, Never>] = []
 
     var isAcceptingConnections: Bool { listener != nil && failure == nil && !cancelled }
+    var queuedConnectionCount: Int { connections.count }
+    var cancellationWaiterCount: Int { cancelledWaiters.count }
+
+    init(queue: DispatchQueue = DispatchQueue(label: "appstage.control.listener"), startSocket: @escaping @Sendable (StageControlSocket) async -> Void = { socket in socket.start() }) {
+        self.queue = queue
+        self.startSocket = startSocket
+    }
 
     func start() async throws -> UInt16 {
         let parameters = NWParameters.tcp
@@ -128,16 +137,18 @@ actor StageControlListener {
         case .cancelled:
             cancelled = true
             fail(.disconnected)
-            cancelledWaiter?.resume()
-            cancelledWaiter = nil
+            let waiters = cancelledWaiters
+            cancelledWaiters.removeAll()
+            waiters.forEach { $0.resume() }
         default: break
         }
     }
 
-    private func accept(_ connection: NWConnection) async {
+    func accept(_ connection: NWConnection) async {
         guard failure == nil else { connection.cancel(); return }
         let socket = StageControlSocket(connection)
-        await socket.start()
+        await startSocket(socket)
+        guard failure == nil else { await socket.close(); return }
         if connectionWaiters.isEmpty { connections.append(socket) }
         else { connectionWaiters.removeFirst().resume(returning: socket) }
     }
@@ -161,11 +172,15 @@ actor StageControlListener {
         fail(.disconnected)
         if !cancelled, let listener {
             await withCheckedContinuation { continuation in
-                cancelledWaiter = continuation
-                listener.cancel()
+                cancelledWaiters.append(continuation)
+                if !cancellationRequested {
+                    cancellationRequested = true
+                    listener.cancel()
+                }
             }
         }
-        for connection in connections { await connection.close() }
+        let queued = connections
         connections.removeAll()
+        for connection in queued { await connection.close() }
     }
 }
