@@ -33,10 +33,13 @@ public struct StageControlStateMachine: Sendable {
         guard allowed else {
             throw StageControlError.invalidState("Cannot perform \(command) while control state is \(state.rawValue)")
         }
+        if case .loadScenario = command, state == .finished { state = .connected }
+        if case .reset = command { state = .scenarioLoaded }
         if case .prepare = command { state = .preparing }
     }
 
     public mutating func succeeded(_ command: StageControlCommand) {
+        guard state != .finished && state != .failed else { return }
         switch command {
         case let .loadScenario(id):
             scenarioID = id
@@ -49,6 +52,7 @@ public struct StageControlStateMachine: Sendable {
     }
 
     public mutating func received(_ event: StageControlEvent) {
+        guard state != .finished && state != .failed else { return }
         switch event.kind {
         case .ready: state = .ready
         case .playing: state = .playing

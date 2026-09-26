@@ -9,6 +9,7 @@ public actor StageControlClient {
     private var machine = StageControlStateMachine()
     private var readTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
+    private var requestTasks: [UUID: Task<Void, Never>] = [:]
     private var closed = false
     private var connectTimedOut = false
 
@@ -64,7 +65,8 @@ public actor StageControlClient {
                 guard case let .request(request) = message else {
                     throw StageControlError.invalidState("Unexpected controller control message")
                 }
-                Task { await self.handle(request) }
+                guard !closed else { break }
+                requestTasks[request.id] = Task { await self.handle(request) }
             }
         } catch {
             if !closed { await close() }
@@ -72,7 +74,8 @@ public actor StageControlClient {
     }
 
     private func handle(_ request: StageControlRequest) async {
-        guard let socket else { return }
+        defer { requestTasks.removeValue(forKey: request.id) }
+        guard !closed && !Task.isCancelled, let socket else { return }
         do {
             try machine.begin(request.command)
             switch request.command {
@@ -85,9 +88,12 @@ public actor StageControlClient {
             case .queryState: break
             case .seek: throw StageControlError.unsupported("seek reconstruction")
             }
+            guard !closed && !Task.isCancelled else { return }
+            if machine.state == .failed { return }
             machine.succeeded(request.command)
             let snapshot = StageControlSnapshot(state: machine.state, scenarioID: machine.scenarioID)
             try await socket.send(.response(.init(requestID: request.id, result: .success(snapshot))))
+            guard !closed && !Task.isCancelled && machine.state != .finished && machine.state != .failed else { return }
             switch request.command {
             case .prepare: try await sendEvent(.init(kind: .ready, scenarioID: machine.scenarioID))
             case .play: try await sendEvent(.init(kind: .playing, scenarioID: machine.scenarioID))
@@ -95,13 +101,25 @@ public actor StageControlClient {
             default: break
             }
         } catch {
-            let wrapped = (error as? StageControlError) ?? .remoteFailure(error.localizedDescription)
+            guard !closed && !Task.isCancelled else { return }
+            let wrapped = controlError(error)
             try? await socket.send(.response(.init(requestID: request.id, result: .failure(wrapped))))
             if case .invalidState = wrapped { return }
             if case .unsupported = wrapped { return }
             machine.failed()
             try? await socket.send(.event(.init(kind: .failed, scenarioID: machine.scenarioID, error: wrapped.localizedDescription)))
         }
+    }
+
+    private func controlError(_ error: Error) -> StageControlError {
+        if let error = error as? StageControlError { return error }
+        if let registryError = error as? StageActionRegistryError {
+            switch registryError {
+            case let .unknownAction(id): return .remoteFailure("Unknown semantic action: \(id.rawValue)")
+            case let .duplicateAction(id): return .remoteFailure("Duplicate semantic action registration: \(id.rawValue)")
+            }
+        }
+        return .remoteFailure(error.localizedDescription)
     }
 
     private func forwardEvents() async {
@@ -114,6 +132,8 @@ public actor StageControlClient {
     }
 
     private func sendEvent(_ event: StageControlEvent) async throws {
+        guard !closed else { throw StageControlError.disconnected }
+        if machine.state == .finished || machine.state == .failed { return }
         machine.received(event)
         guard let socket else { throw StageControlError.disconnected }
         try await socket.send(.event(event))
@@ -124,6 +144,8 @@ public actor StageControlClient {
         closed = true
         readTask?.cancel()
         eventTask?.cancel()
+        for task in requestTasks.values { task.cancel() }
+        requestTasks.removeAll()
         await socket?.close()
         await host.controlDisconnected()
         machine.disconnected()

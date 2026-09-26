@@ -91,6 +91,10 @@ actor StageControlListener {
     private var connectionWaiters: [CheckedContinuation<StageControlSocket, Error>] = []
     private var connections: [StageControlSocket] = []
     private var failure: StageControlError?
+    private var cancelled = false
+    private var cancelledWaiter: CheckedContinuation<Void, Never>?
+
+    var isAcceptingConnections: Bool { listener != nil && failure == nil && !cancelled }
 
     func start() async throws -> UInt16 {
         let parameters = NWParameters.tcp
@@ -121,12 +125,17 @@ actor StageControlListener {
                 readyWaiter = nil
             } else { fail(.transport("Listener has no local port")) }
         case .failed(let error): fail(.transport(error.localizedDescription))
-        case .cancelled: fail(.disconnected)
+        case .cancelled:
+            cancelled = true
+            fail(.disconnected)
+            cancelledWaiter?.resume()
+            cancelledWaiter = nil
         default: break
         }
     }
 
     private func accept(_ connection: NWConnection) async {
+        guard failure == nil else { connection.cancel(); return }
         let socket = StageControlSocket(connection)
         await socket.start()
         if connectionWaiters.isEmpty { connections.append(socket) }
@@ -149,8 +158,13 @@ actor StageControlListener {
     }
 
     func close() async {
-        listener?.cancel()
         fail(.disconnected)
+        if !cancelled, let listener {
+            await withCheckedContinuation { continuation in
+                cancelledWaiter = continuation
+                listener.cancel()
+            }
+        }
         for connection in connections { await connection.close() }
         connections.removeAll()
     }

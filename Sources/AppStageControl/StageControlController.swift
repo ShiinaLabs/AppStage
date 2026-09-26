@@ -11,13 +11,18 @@ public actor StageControlController {
     private var socket: StageControlSocket?
     private var machine = StageControlStateMachine()
     private var pending: [UUID: CheckedContinuation<StageControlSnapshot, Error>] = [:]
-    private var eventWaiters: [StageControlEventKind: [CheckedContinuation<StageControlEvent, Error>]] = [:]
+    private struct EventWaiter {
+        let id: UUID
+        let continuation: CheckedContinuation<StageControlEvent, Error>
+    }
+    private var eventWaiters: [StageControlEventKind: [EventWaiter]] = [:]
     private var eventBacklog: [StageControlEvent] = []
     private var readTask: Task<Void, Never>?
     private var timeoutPhase: String?
     private var closed = false
 
     public var state: StageControlState { machine.state }
+    func isAcceptingConnections() async -> Bool { await listener.isAcceptingConnections }
 
     public init(token: String, sessionID: UUID, bundleIdentifier: String) {
         self.token = token
@@ -57,6 +62,7 @@ public actor StageControlController {
                 let identity = StageControlIdentity(token: token, sessionID: sessionID, bundleIdentifier: bundleIdentifier, pid: expectedPID)
                 try identity.validate(hello)
                 try await candidate.send(.accepted)
+                await listener.close()
                 machine.connected()
                 readTask = Task { await self.readLoop() }
                 return
@@ -100,29 +106,45 @@ public actor StageControlController {
     }
 
     public func waitForEvent(_ kind: StageControlEventKind, timeout: Duration = .seconds(30)) async throws -> StageControlEvent {
-        try await withTaskCancellationHandler {
-            try await waitForEventUncancelled(kind, timeout: timeout)
+        let waiterID = UUID()
+        return try await withTaskCancellationHandler {
+            try await waitForEventUncancelled(kind, id: waiterID, timeout: timeout)
         } onCancel: {
-            Task { await self.close() }
+            Task { await self.cancelEventWaiter(waiterID) }
         }
     }
 
-    private func waitForEventUncancelled(_ kind: StageControlEventKind, timeout: Duration) async throws -> StageControlEvent {
+    private func waitForEventUncancelled(_ kind: StageControlEventKind, id: UUID, timeout: Duration) async throws -> StageControlEvent {
+        if Task.isCancelled { throw CancellationError() }
+        if closed { throw StageControlError.disconnected }
         if let index = eventBacklog.firstIndex(where: { $0.kind == kind }) {
             return eventBacklog.remove(at: index)
         }
         if let failed = eventBacklog.first(where: { $0.kind == .failed }) {
             throw StageControlError.remoteFailure(failed.error ?? "Host scenario failed")
         }
+        if machine.state == .failed { throw StageControlError.remoteFailure("Host scenario failed") }
+        if machine.state == .finished { throw StageControlError.invalidState("Scenario already finished") }
         let timer = deadline(.scenario, after: timeout)
         defer { timer.cancel() }
         do {
             return try await withCheckedThrowingContinuation { continuation in
-                eventWaiters[kind, default: []].append(continuation)
+                if Task.isCancelled { continuation.resume(throwing: CancellationError()) }
+                else if closed { continuation.resume(throwing: StageControlError.disconnected) }
+                else { eventWaiters[kind, default: []].append(EventWaiter(id: id, continuation: continuation)) }
             }
         } catch {
             if let timeoutPhase { throw StageControlError.timedOut(timeoutPhase) }
             throw error
+        }
+    }
+
+    private func cancelEventWaiter(_ id: UUID) {
+        for kind in Array(eventWaiters.keys) {
+            guard let index = eventWaiters[kind]?.firstIndex(where: { $0.id == id }) else { continue }
+            let waiter = eventWaiters[kind]!.remove(at: index)
+            waiter.continuation.resume(throwing: CancellationError())
+            return
         }
     }
 
@@ -163,6 +185,14 @@ public actor StageControlController {
         guard let continuation = pending.removeValue(forKey: response.requestID) else { return }
         switch response.result {
         case let .success(snapshot):
+            if machine.state == .failed {
+                continuation.resume(throwing: StageControlError.remoteFailure(eventBacklog.last(where: { $0.kind == .failed })?.error ?? "Host scenario failed"))
+                return
+            }
+            if machine.state == .finished {
+                continuation.resume(returning: StageControlSnapshot(state: .finished, scenarioID: machine.scenarioID, positionMilliseconds: snapshot.positionMilliseconds))
+                return
+            }
             // Host's snapshot is authoritative for correlated command completion.
             if snapshot.state == .scenarioLoaded, let id = snapshot.scenarioID {
                 machine.succeeded(.loadScenario(id))
@@ -182,14 +212,17 @@ public actor StageControlController {
         if event.kind == .failed {
             let error = StageControlError.remoteFailure(event.error ?? "Host scenario failed")
             for (kind, waiters) in eventWaiters where kind != .failed {
-                waiters.forEach { $0.resume(throwing: error) }
+                waiters.forEach { $0.continuation.resume(throwing: error) }
             }
             eventWaiters = eventWaiters.filter { $0.key == .failed }
+            let pendingValues = Array(pending.values)
+            pending.removeAll()
+            pendingValues.forEach { $0.resume(throwing: error) }
         }
         if var waiters = eventWaiters[event.kind], !waiters.isEmpty {
             let waiter = waiters.removeFirst()
             eventWaiters[event.kind] = waiters
-            waiter.resume(returning: event)
+            waiter.continuation.resume(returning: event)
         } else { eventBacklog.append(event) }
     }
 
@@ -208,14 +241,14 @@ public actor StageControlController {
         guard !closed else { return }
         closed = true
         readTask?.cancel()
-        await socket?.close()
-        await listener.close()
         let error = StageControlError.disconnected
         let pendingValues = Array(pending.values)
         pending.removeAll()
         pendingValues.forEach { $0.resume(throwing: error) }
-        for waiters in eventWaiters.values { waiters.forEach { $0.resume(throwing: error) } }
+        for waiters in eventWaiters.values { waiters.forEach { $0.continuation.resume(throwing: error) } }
         eventWaiters.removeAll()
+        await socket?.close()
+        await listener.close()
         machine.disconnected()
     }
 }
