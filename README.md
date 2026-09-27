@@ -1,75 +1,41 @@
 # AppStage
 
-AppStage provides generic scenario playback, macOS window layout, and screen
-capture for automated app demonstrations. Product-specific scenarios and data
-providers belong in the host application; AppStage does not depend on any
-particular product.
+AppStage is a deterministic demo-capture framework for macOS apps. A host app
+defines repeatable scenarios; AppStage drives them and records clean PNG and
+MOV assets from the command line.
 
-## Package targets
+## What it does
 
-- AppStage: scenario identifiers, deterministic sequences, cue playback, and
-  linear scenario scripts with async conditions and semantic cursor targets.
-- AppStageMac: host-app window sizing plus an opt-in demo cursor overlay for
-  controlled scenarios.
-- AppStageCapture: ScreenCaptureKit discovery, screenshots, and MOV recording.
-- AppStageCLI: the appstage command-line tool.
+- Runs deterministic demo scenarios.
+- Shows cursor movement and interaction feedback.
+- Uses real macOS Accessibility actions for visible UI controls.
+- Captures screenshots and MOV recordings.
+- Composes recordings onto a custom video canvas.
+- Records batches with a fresh app process for each scenario.
 
-## Commands
+## How it works
 
-List running applications visible to ScreenCaptureKit:
+`Host scenario → AppStage control → visible interaction → screen capture → PNG / MOV`
 
-~~~sh
-appstage list
-~~~
+## Example
 
-Launch a controlled app instance and discover its scenario IDs:
-
-~~~sh
-appstage scenarios --app "/Applications/Example.app"
-~~~
-
-Capture a PNG around an already-running app window:
-
-~~~sh
-appstage snapshot \
-  --bundle-id com.example.application \
-  --output ./Artifacts/snapshot.png
-~~~
-
-Launch an app with scenario arguments, then capture a MOV:
-
-~~~sh
-appstage record \
-  --app "/Applications/Example.app" \
-  --scenario walkthrough \
-  --duration 10 \
+```sh
+appstage record --app "/Applications/Example.app" --scenario walkthrough \
   --output ./Artifacts/walkthrough.mov
-~~~
 
-Record every scenario exposed by one controlled app session into a batch
-directory. The directory contains one MOV per scenario and an incremental
-`manifest.json` describing the capture and each output:
+appstage capture-all --app "/Applications/Example.app" \
+  --output-dir ./Artifacts/batch
+```
 
-~~~sh
-appstage capture-all \
-  --app "/Applications/Example.app" \
-  --output-dir ./Artifacts/batch \
-  --background-image ./Artifacts/background.png
-~~~
+## Documentation
 
-The target app receives --appstage-scenario, --appstage-autoplay, and
---appstage-window arguments. It can parse them with StageLaunchConfiguration.
-Recording uses a one-second startup warm-up before capture begins.
+- [Getting started](docs/getting-started.md)
+- [Designing scenarios](docs/scenarios.md)
+- [Capture commands and output](docs/capture.md)
 
-AppStage uses ScreenCaptureKit for window discovery and display capture. macOS
-may require Screen Recording permission for the appstage executable.
+## Requirements
 
-## Build and test
-
-~~~sh
-swift build
-swift test
-~~~
+macOS 14 or later, Screen Recording permission, and Accessibility permission for real AX interaction.
 
 ## License
 
