@@ -2,7 +2,7 @@ import AppStage
 import Foundation
 
 public enum StageControlProtocol {
-    public static let version = 2
+    public static let version = 3
     public static let maximumMessageSize = 1_048_576
 }
 
@@ -144,6 +144,31 @@ public struct StageControlResponse: Codable, Sendable, Equatable {
     }
 }
 
+public enum StageAccessibilityOperation: Codable, Sendable, Equatable {
+    case resolve(StageAccessibilityLocator)
+    case press(StageAccessibilityLocator)
+    case exists(StageAccessibilityLocator)
+}
+
+public struct StageAccessibilityRequest: Codable, Sendable, Equatable {
+    public let id: UUID
+    public let operation: StageAccessibilityOperation
+    public init(id: UUID = UUID(), operation: StageAccessibilityOperation) { self.id = id; self.operation = operation }
+}
+
+public enum StageAccessibilityResult: Codable, Sendable, Equatable {
+    case resolved(StageAccessibilityFrame)
+    case pressed
+    case exists(Bool)
+    case failure(String)
+}
+
+public struct StageAccessibilityResponse: Codable, Sendable, Equatable {
+    public let requestID: UUID
+    public let result: StageAccessibilityResult
+    public init(requestID: UUID, result: StageAccessibilityResult) { self.requestID = requestID; self.result = result }
+}
+
 public enum StageControlEventKind: String, Codable, Sendable {
     case ready, playing, paused, finished, failed
 }
@@ -169,4 +194,6 @@ public enum StageControlMessage: Codable, Sendable, Equatable {
     case request(StageControlRequest)
     case response(StageControlResponse)
     case event(StageControlEvent)
+    case accessibilityRequest(StageAccessibilityRequest)
+    case accessibilityResponse(StageAccessibilityResponse)
 }

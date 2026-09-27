@@ -1,6 +1,14 @@
 {
-  "originHash" : "a355cb399c2fd217a7b083ccffd883e0bacebaf78b9585debac06fdc9953e698",
+  "originHash" : "5f151b6f4833a06aa14efd5c94d09d8a324f0f40caea3c7d5edf68832a6caa7a",
   "pins" : [
+    {
+      "identity" : "axe",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/lnquy/axe.git",
+      "state" : {
+        "revision" : "9d6faa2724ce95b5acc24685de692dc832b990b4"
+      }
+    },
     {
       "identity" : "swift-argument-parser",
       "kind" : "remoteSourceControl",

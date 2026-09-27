@@ -115,7 +115,11 @@ public actor StageVideoRecorder {
             throw StageVideoRecorderError.writerSetupFailed("The video input cannot be added.")
         }
         assetWriter.add(writerInput)
-        let filter = try await StageCaptureDiscovery.displayFilter(display: display, including: window)
+        let filter = try await StageCaptureDiscovery.displayFilter(
+            display: display,
+            including: window,
+            includingApplicationWindows: configuration.includesApplicationWindows
+        )
         let readiness = StageVideoFrameReadiness()
         let output = StageVideoSampleWriter(
             writer: assetWriter,
@@ -217,15 +221,17 @@ public actor StageVideoRecorder {
         guard let stream else { return }
         let display = self.display
         let window = self.window
+        let configuration = self.configuration
         filterRefreshFailure = nil
-        filterRefreshTask = Task { [weak self, stream, display, window] in
+        filterRefreshTask = Task { [weak self, stream, display, window, configuration] in
             while !Task.isCancelled {
                 do {
                     try await Task.sleep(for: .milliseconds(500))
                     guard !Task.isCancelled else { return }
                     let filter = try await StageCaptureDiscovery.displayFilter(
                         display: display,
-                        including: window
+                        including: window,
+                        includingApplicationWindows: configuration.includesApplicationWindows
                     )
                     try await stream.updateContentFilter(filter)
                 } catch {

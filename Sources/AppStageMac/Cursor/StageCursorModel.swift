@@ -1,4 +1,5 @@
 import AppStage
+import AppKit
 import Observation
 import SwiftUI
 
@@ -20,6 +21,22 @@ public final class StageCursorModel: StageCursorInteractionDriving {
 
     private var targetPoints: [StageTargetID: StagePoint] = [:]
     private var isPositionInitialized = false
+    weak var accessibilityCoordinateView: NSView?
+
+    /// Maps a current Accessibility screen frame into the cursor overlay's local coordinates.
+    public func overlayPoint(for frame: StageAccessibilityFrame) -> StagePoint? {
+        guard let view = accessibilityCoordinateView, let window = view.window else { return nil }
+        guard let mainScreen = NSScreen.main else { return nil }
+        // AX global frames use a top-left origin; AppKit screen coordinates use bottom-left.
+        let screenPoint = NSPoint(
+            x: frame.x + frame.width / 2,
+            y: mainScreen.frame.maxY - frame.y - frame.height / 2
+        )
+        let windowPoint = window.convertPoint(fromScreen: screenPoint)
+        let local = view.convert(windowPoint, from: nil)
+        let y = view.isFlipped ? local.y : view.bounds.height - local.y
+        return StagePoint(x: local.x, y: y)
+    }
 
     public init() {}
 
@@ -233,12 +250,89 @@ private struct StageCursorLayerModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .coordinateSpace(name: StageCursorCoordinateSpace.name)
-            .overlay(alignment: .topLeading) {
-                StageCursorOverlay(model: model)
+            .overlay {
+                StageCursorCoordinateAnchor(model: model)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .allowsHitTesting(false)
             }
             .onPreferenceChange(StageCursorTargetPreference.self) { model.updateTargets($0) }
     }
+}
+
+private struct StageCursorCoordinateAnchor: NSViewRepresentable {
+    let model: StageCursorModel
+    func makeNSView(context: Context) -> NSView { AnchorView(model: model) }
+    func updateNSView(_ view: NSView, context: Context) { (view as? AnchorView)?.model = model }
+
+    private final class AnchorView: NSView {
+        weak var model: StageCursorModel?
+        private var overlayController: StageCursorOverlayWindowController?
+        init(model: StageCursorModel) { self.model = model; super.init(frame: .zero); wantsLayer = true }
+        required init?(coder: NSCoder) { nil }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            model?.accessibilityCoordinateView = self
+            if let window, let model {
+                overlayController = StageCursorOverlayWindowController(parent: window, anchor: self, model: model)
+            } else {
+                overlayController?.close()
+                overlayController = nil
+            }
+        }
+        override func layout() { super.layout(); model?.accessibilityCoordinateView = self; overlayController?.updateFrame() }
+    }
+}
+
+@MainActor
+private final class StageCursorOverlayWindowController {
+    private weak var anchor: NSView?
+    private let panel: NSPanel
+    private var observers: [NSObjectProtocol] = []
+
+    init(parent: NSWindow, anchor: NSView, model: StageCursorModel) {
+        self.anchor = anchor
+        panel = NSPanel(
+            contentRect: .zero,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.ignoresMouseEvents = true
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        let host = NSHostingView(rootView: StageCursorOverlay(model: model).allowsHitTesting(false))
+        host.autoresizingMask = [.width, .height]
+        panel.contentView = host
+        let center = NotificationCenter.default
+        for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
+            observers.append(center.addObserver(forName: name, object: parent, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.updateFrame() }
+            })
+        }
+        updateFrame()
+        panel.orderFrontRegardless()
+    }
+
+    func updateFrame() {
+        guard let anchor, let window = anchor.window else { return }
+        let boundsInWindow = anchor.convert(anchor.bounds, to: nil)
+        let screenFrame = window.convertToScreen(boundsInWindow)
+        guard screenFrame.width > 0, screenFrame.height > 0 else { return }
+        panel.setFrame(screenFrame, display: true)
+        if panel.isVisible { panel.orderFrontRegardless() }
+    }
+
+    func close() {
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        observers.removeAll()
+        panel.close()
+    }
+
 }
 
 private struct StageCursorOverlay: View {

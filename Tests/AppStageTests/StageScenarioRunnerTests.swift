@@ -81,6 +81,55 @@ import Testing
         #expect(cursor.clickCount == 1)
     }
 
+    @Test func accessibilityPressMovesToResolvedFrameBeforePressAndCondition() async throws {
+        let target = StageTargetID("picker")
+        let targets = StageTargetRegistry()
+        try targets.register(target, locator: StageAccessibilityLocator(identifier: "picker"))
+        let cursor = TestCursor()
+        let accessibility = TestAccessibility()
+        var conditionWasChecked = false
+        let conditions = StageConditionRegistry()
+        try conditions.register(StageConditionID("opened")) { conditionWasChecked = true; return true }
+        let runner = StageScenarioRunner(
+            script: StageScenarioScript(id: StageScenarioID("ax"), steps: [
+                .accessibilityPress(target: target, movementDuration: .zero, hoverDuration: .zero, condition: StageConditionID("opened")),
+            ]),
+            actions: StageActionRegistry(), conditions: conditions, targets: targets, cursor: cursor,
+            accessibility: accessibility, accessibilityFrameToPoint: { StagePoint(x: $0.x + $0.width / 2, y: $0.y + $0.height / 2) }
+        )
+
+        try await runner.start().value
+
+        #expect(cursor.positions == [StagePoint(x: 25, y: 35)])
+        #expect(cursor.events == ["move", "click"])
+        #expect(accessibility.events == ["resolve", "press"])
+        #expect(conditionWasChecked)
+    }
+
+    @Test func accessibilityPressFailureStopsFollowingSteps() async throws {
+        enum Expected: Error { case press }
+        let target = StageTargetID("picker")
+        let targets = StageTargetRegistry()
+        try targets.register(target, locator: StageAccessibilityLocator(identifier: "picker"))
+        let accessibility = TestAccessibility()
+        accessibility.pressError = Expected.press
+        var laterStepRan = false
+        let actions = StageActionRegistry()
+        try actions.register(StageActionID("later")) { _ in laterStepRan = true }
+        let runner = StageScenarioRunner(
+            script: StageScenarioScript(id: StageScenarioID("ax"), steps: [
+                .accessibilityPress(target: target, movementDuration: .zero, hoverDuration: .zero),
+                .perform(StageAction(id: StageActionID("later"))),
+            ]),
+            actions: actions, conditions: StageConditionRegistry(), targets: targets, cursor: TestCursor(),
+            accessibility: accessibility, accessibilityFrameToPoint: { _ in StagePoint(x: 1, y: 2) }
+        )
+        do { try await runner.start().value; Issue.record("Expected AX press failure") }
+        catch is Expected {}
+        #expect(!laterStepRan)
+        #expect(runner.state == .failed)
+    }
+
     @Test func cancelStopsBeforeFollowingAction() async throws {
         var laterActionRan = false
         let actions = StageActionRegistry()
@@ -333,5 +382,19 @@ import Testing
             events.append("scroll-\(direction == .up ? "up" : "down")-\(Int(amount.distance))")
         }
         func typeText(_ text: String, characterInterval: Duration) async throws { events.append("type-\(text)") }
+    }
+
+    @MainActor private final class TestAccessibility: StageAccessibilityInteractionDriving {
+        private(set) var events: [String] = []
+        var pressError: Error?
+        func resolve(_ target: StageTargetID) async throws -> StageAccessibilityFrame {
+            events.append("resolve")
+            return StageAccessibilityFrame(x: 10, y: 20, width: 30, height: 30)
+        }
+        func press(_ target: StageTargetID) async throws {
+            events.append("press")
+            if let pressError { throw pressError }
+        }
+        func elementExists(_ target: StageTargetID) async throws -> Bool { true }
     }
 }

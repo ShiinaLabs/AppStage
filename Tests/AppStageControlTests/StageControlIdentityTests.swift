@@ -8,8 +8,8 @@ final class StageControlIdentityTests: XCTestCase {
     func testHandshakeChecksEveryIdentityField() throws {
         let expected = StageControlIdentity(token: token, sessionID: session, bundleIdentifier: "example.app", pid: 42)
         try expected.validate(.init(token: token, sessionID: session, bundleIdentifier: "example.app", pid: 42))
-        XCTAssertThrowsError(try expected.validate(.init(version: 3, token: token, sessionID: session, bundleIdentifier: "example.app", pid: 42))) {
-            XCTAssertEqual($0 as? StageControlError, .protocolVersionMismatch(expected: 2, actual: 3))
+        XCTAssertThrowsError(try expected.validate(.init(version: 2, token: token, sessionID: session, bundleIdentifier: "example.app", pid: 42))) {
+            XCTAssertEqual($0 as? StageControlError, .protocolVersionMismatch(expected: 3, actual: 2))
         }
         XCTAssertThrowsError(try expected.validate(.init(token: "wrong", sessionID: session, bundleIdentifier: "example.app", pid: 42))) {
             XCTAssertEqual($0 as? StageControlError, .invalidToken)

@@ -16,6 +16,31 @@ public struct StageTargetID: RawRepresentable, Hashable, Codable, Sendable {
     public init(_ rawValue: String) { self.init(rawValue: rawValue) }
 }
 
+/// Product-neutral selectors supported by the controller's accessibility backend.
+public struct StageAccessibilityLocator: Codable, Sendable, Equatable {
+    public let identifier: String?
+    public let role: String?
+    public let title: String?
+    public let value: String?
+
+    public init(identifier: String? = nil, role: String? = nil, title: String? = nil, value: String? = nil) {
+        self.identifier = identifier
+        self.role = role
+        self.title = title
+        self.value = value
+    }
+}
+
+public struct StageAccessibilityFrame: Codable, Sendable, Equatable {
+    public let x: Double
+    public let y: Double
+    public let width: Double
+    public let height: Double
+    public init(x: Double, y: Double, width: Double, height: Double) {
+        self.x = x; self.y = y; self.width = width; self.height = height
+    }
+}
+
 /// A two-dimensional point in the host's cursor overlay coordinate space.
 public struct StagePoint: Sendable, Equatable {
     public var x: Double
@@ -70,6 +95,13 @@ public enum StageScenarioStep: Sendable {
         condition: StageConditionID? = nil,
         movementDuration: Duration = .milliseconds(420),
         hoverDuration: Duration = .zero,
+        conditionTimeout: Duration = .seconds(10)
+    )
+    case accessibilityPress(
+        target: StageTargetID,
+        movementDuration: Duration = .milliseconds(420),
+        hoverDuration: Duration = .milliseconds(120),
+        condition: StageConditionID? = nil,
         conditionTimeout: Duration = .seconds(10)
     )
     case scroll(
@@ -185,12 +217,29 @@ public enum StageTargetRegistryError: Error, Equatable, Sendable, LocalizedError
 public final class StageTargetRegistry {
     public typealias Resolver = @MainActor @Sendable () async throws -> StagePoint?
     private var resolvers: [StageTargetID: Resolver] = [:]
+    private var accessibilityLocators: [StageTargetID: StageAccessibilityLocator] = [:]
 
     public init() {}
 
     public func register(_ id: StageTargetID, resolver: @escaping Resolver) throws {
-        guard resolvers[id] == nil else { throw StageTargetRegistryError.duplicateTarget(id) }
+        guard resolvers[id] == nil, accessibilityLocators[id] == nil else { throw StageTargetRegistryError.duplicateTarget(id) }
         resolvers[id] = resolver
+    }
+
+    public func register(_ id: StageTargetID, locator: StageAccessibilityLocator) throws {
+        guard resolvers[id] == nil, accessibilityLocators[id] == nil else { throw StageTargetRegistryError.duplicateTarget(id) }
+        accessibilityLocators[id] = locator
+    }
+
+    public func register(_ id: StageTargetID, resolver: @escaping Resolver, locator: StageAccessibilityLocator?) throws {
+        guard resolvers[id] == nil, accessibilityLocators[id] == nil else { throw StageTargetRegistryError.duplicateTarget(id) }
+        resolvers[id] = resolver
+        if let locator { accessibilityLocators[id] = locator }
+    }
+
+    public func accessibilityLocator(for id: StageTargetID) throws -> StageAccessibilityLocator {
+        guard let locator = accessibilityLocators[id] else { throw StageTargetRegistryError.unknownTarget(id) }
+        return locator
     }
 
     public func resolve(_ id: StageTargetID) async throws -> StagePoint {
@@ -199,7 +248,14 @@ public final class StageTargetRegistry {
         return point
     }
 
-    public func removeAll() { resolvers.removeAll() }
+    public func removeAll() { resolvers.removeAll(); accessibilityLocators.removeAll() }
+}
+
+@MainActor
+public protocol StageAccessibilityInteractionDriving: AnyObject {
+    func resolve(_ target: StageTargetID) async throws -> StageAccessibilityFrame
+    func press(_ target: StageTargetID) async throws
+    func elementExists(_ target: StageTargetID) async throws -> Bool
 }
 
 @MainActor
@@ -225,9 +281,15 @@ public protocol StageCursorInteractionDriving: StageCursorDriving {
 
 public enum StageScenarioRunnerError: Error, Equatable, Sendable, LocalizedError {
     case cursorInteractionUnavailable
+    case accessibilityInteractionUnavailable
+    case accessibilityFrameConversionUnavailable
 
     public var errorDescription: String? {
-        "The host cursor does not support this interaction."
+        switch self {
+        case .cursorInteractionUnavailable: "The host cursor does not support this interaction."
+        case .accessibilityInteractionUnavailable: "The host has no Accessibility interaction bridge."
+        case .accessibilityFrameConversionUnavailable: "The host cannot map the Accessibility frame into its cursor overlay."
+        }
     }
 }
 
@@ -243,6 +305,8 @@ public final class StageScenarioRunner {
     private let conditions: StageConditionRegistry
     private let targets: StageTargetRegistry
     private let cursor: any StageCursorDriving
+    private let accessibility: (any StageAccessibilityInteractionDriving)?
+    private let accessibilityFrameToPoint: (@MainActor @Sendable (StageAccessibilityFrame) -> StagePoint?)?
     private var runTask: Task<Void, Error>?
 
     public private(set) var state: StageScenarioRunnerState = .idle
@@ -252,13 +316,17 @@ public final class StageScenarioRunner {
         actions: StageActionRegistry,
         conditions: StageConditionRegistry,
         targets: StageTargetRegistry,
-        cursor: any StageCursorDriving
+        cursor: any StageCursorDriving,
+        accessibility: (any StageAccessibilityInteractionDriving)? = nil,
+        accessibilityFrameToPoint: (@MainActor @Sendable (StageAccessibilityFrame) -> StagePoint?)? = nil
     ) {
         self.script = script
         self.actions = actions
         self.conditions = conditions
         self.targets = targets
         self.cursor = cursor
+        self.accessibility = accessibility
+        self.accessibilityFrameToPoint = accessibilityFrameToPoint
     }
 
     @discardableResult
@@ -309,6 +377,16 @@ public final class StageScenarioRunner {
                         if hoverDuration > .zero { try await interactions.hover(for: hoverDuration) }
                         try await cursor.click()
                         if let action { try await actions.execute(action) }
+                        if let condition { try await conditions.waitUntil(condition, timeout: conditionTimeout) }
+                    case let .accessibilityPress(target, movementDuration, hoverDuration, condition, conditionTimeout):
+                        guard let accessibility else { throw StageScenarioRunnerError.accessibilityInteractionUnavailable }
+                        guard let accessibilityFrameToPoint else { throw StageScenarioRunnerError.accessibilityFrameConversionUnavailable }
+                        let frame = try await accessibility.resolve(target)
+                        guard let point = accessibilityFrameToPoint(frame) else { throw StageTargetRegistryError.unavailableTarget(target) }
+                        try await cursor.move(to: point, duration: movementDuration)
+                        if hoverDuration > .zero { try await interactions.hover(for: hoverDuration) }
+                        try await cursor.click()
+                        try await accessibility.press(target)
                         if let condition { try await conditions.waitUntil(condition, timeout: conditionTimeout) }
                     case let .scroll(target, direction, amount, movementDuration, hoverDuration, scrollDuration, action):
                         let point = try await targets.resolve(target)

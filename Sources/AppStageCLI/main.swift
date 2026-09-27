@@ -10,8 +10,85 @@ struct AppStageCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "appstage",
         abstract: "Launch, inspect, and capture macOS app scenarios.",
-        subcommands: [ListCommand.self, ScenariosCommand.self, SnapshotCommand.self, RecordCommand.self]
+        subcommands: [ListCommand.self, ScenariosCommand.self, RunCommand.self, SnapshotCommand.self, RecordCommand.self]
     )
+}
+
+struct RunCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "run",
+        abstract: "Run a controlled app scenario without recording video."
+    )
+
+    @Option(name: .long, help: "Path to the target .app bundle.") var app: String
+    @Option(name: .long, help: "Target app bundle identifier. Defaults to the app's bundle identifier.") var bundleID: String?
+    @Option(name: .long, help: "Scenario identifier to run.") var scenario: String
+    @Option(name: .long, help: "Timeout in seconds for handshake, preparation, and scenario completion.") var timeout: Int = 60
+    @Flag(name: .long, help: "Terminate an already running target app and launch a new controlled instance.") var replaceExisting = false
+
+    func run() async throws {
+        guard (1...600).contains(timeout) else { throw ValidationError("--timeout must be between 1 and 600 seconds.") }
+        let appURL = URL(fileURLWithPath: app).standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: appURL.path, isDirectory: &isDirectory), isDirectory.boolValue,
+              let appBundleID = Bundle(url: appURL)?.bundleIdentifier, !appBundleID.isEmpty else {
+            throw ValidationError("--app must point to an app bundle with a bundle identifier.")
+        }
+        if let bundleID, bundleID != appBundleID {
+            throw ValidationError("--bundle-id must match the app bundle identifier (\(appBundleID)).")
+        }
+        try await runScenario(
+            appURL: appURL, bundleIdentifier: appBundleID, scenarioID: StageScenarioID(scenario),
+            timeout: .seconds(timeout), policy: replaceExisting ? .replace : .reject
+        )
+    }
+}
+
+@MainActor
+private func runScenario(
+    appURL: URL,
+    bundleIdentifier: String,
+    scenarioID: StageScenarioID,
+    timeout: Duration,
+    policy: StageExistingApplicationPolicy
+) async throws {
+    let token = try StageControlToken.generate()
+    let sessionID = UUID()
+    let controller = StageControlController(
+        token: token, sessionID: sessionID, bundleIdentifier: bundleIdentifier,
+        accessibilityHandler: { operation, pid in StageAccessibilityController.handle(operation, pid: pid) }
+    )
+    var session: StageAppSession?
+    do {
+        let port = try await controller.start()
+        let opened = try await StageAppSession.open(
+            appURL: appURL, bundleIdentifier: bundleIdentifier,
+            arguments: [
+                "--appstage-scenario", scenarioID.rawValue,
+                "--appstage-window", "1100x760",
+                "--appstage-control-host", "127.0.0.1",
+                "--appstage-control-port", String(port),
+                "--appstage-control-token", token,
+                "--appstage-control-session", sessionID.uuidString,
+            ],
+            existingApplicationPolicy: policy
+        )
+        session = opened
+        await controller.bindExpectedPID(opened.processIdentifier)
+        try await controller.waitForHandshake(timeout: timeout)
+        try await controller.request(.loadScenario(scenarioID), timeout: timeout)
+        try await controller.request(.prepare, timeout: timeout)
+        _ = try await controller.waitForEvent(.ready, timeout: timeout)
+        _ = try await controller.request(.play, timeout: timeout)
+        _ = try await controller.waitForEvent(.finished, timeout: timeout)
+        await controller.close()
+        await opened.finish()
+        print("Scenario finished: \(scenarioID.rawValue)")
+    } catch {
+        await controller.close()
+        await session?.finish()
+        throw error
+    }
 }
 
 struct ScenariosCommand: AsyncParsableCommand {
@@ -67,7 +144,10 @@ private func discoverScenarios(
 ) async throws {
     let token = try StageControlToken.generate()
     let sessionID = UUID()
-    let controller = StageControlController(token: token, sessionID: sessionID, bundleIdentifier: bundleIdentifier)
+    let controller = StageControlController(
+        token: token, sessionID: sessionID, bundleIdentifier: bundleIdentifier,
+        accessibilityHandler: { operation, pid in StageAccessibilityController.handle(operation, pid: pid) }
+    )
     var appSession: StageAppSession?
     do {
         let port = try await controller.start()
@@ -250,7 +330,8 @@ struct RecordCommand: AsyncParsableCommand {
             framing: .desktopAroundWindow(
                 horizontalMargin: CGFloat(horizontalMargin),
                 verticalMargin: CGFloat(verticalMargin)
-            )
+            ),
+            includesApplicationWindows: true
         )
 
         let captureTask = Task { @MainActor in
@@ -259,7 +340,8 @@ struct RecordCommand: AsyncParsableCommand {
             let workflow = StageRecordWorkflow(
                 controller: StageSystemRecordController(
                     underlying: StageControlController(
-                        token: token, sessionID: sessionID, bundleIdentifier: applicationBundleID
+                        token: token, sessionID: sessionID, bundleIdentifier: applicationBundleID,
+                        accessibilityHandler: { operation, pid in StageAccessibilityController.handle(operation, pid: pid) }
                     )
                 ),
                 openSession: { arguments, policy in

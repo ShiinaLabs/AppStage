@@ -98,6 +98,12 @@ final class AppStageCaptureTests: XCTestCase {
         XCTAssertEqual(configuration.resolution.pixelSize, CGSize(width: 1_920, height: 1_080))
         XCTAssertEqual(configuration.frameRate, 60)
         XCTAssertEqual(configuration.cursor, .hidden)
+        XCTAssertFalse(configuration.includesApplicationWindows)
+        let controlledConfiguration = try StageCaptureConfiguration(
+            framing: .desktopAroundWindow(horizontalMargin: 220, verticalMargin: 120),
+            includesApplicationWindows: true
+        )
+        XCTAssertTrue(controlledConfiguration.includesApplicationWindows)
     }
 
     func testRecordingConfigurationRejectsInvalidFrameRatesAndVideoDimensions() {

@@ -30,7 +30,7 @@ public struct StageControlFrameDecoder: Sendable {
             } catch {
                 if let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
                    let kind = object.keys.first,
-                   !["hello", "accepted", "rejected", "request", "response", "event"].contains(kind) {
+                   !["hello", "accepted", "rejected", "request", "response", "event", "accessibilityRequest", "accessibilityResponse"].contains(kind) {
                     throw StageControlError.unknownMessageKind
                 }
                 throw StageControlError.invalidJSON

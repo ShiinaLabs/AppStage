@@ -10,6 +10,7 @@ public actor StageControlClient {
     private var readTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
     private var requestTasks: [UUID: Task<Void, Never>] = [:]
+    private var accessibilityPending: [UUID: CheckedContinuation<StageAccessibilityResult, Error>] = [:]
     private var closed = false
     private var connectTimedOut = false
 
@@ -62,16 +63,42 @@ public actor StageControlClient {
         do {
             while !Task.isCancelled {
                 let message = try await socket.receive()
-                guard case let .request(request) = message else {
-                    throw StageControlError.invalidState("Unexpected controller control message")
+                switch message {
+                case let .request(request):
+                    guard !closed else { break }
+                    requestTasks[request.id] = Task { await self.handle(request) }
+                case let .accessibilityResponse(response):
+                    accessibilityPending.removeValue(forKey: response.requestID)?.resume(returning: response.result)
+                default: throw StageControlError.invalidState("Unexpected controller control message")
                 }
-                guard !closed else { break }
-                requestTasks[request.id] = Task { await self.handle(request) }
             }
         } catch {
             if !closed { await close() }
         }
     }
+
+    public func accessibility(_ operation: StageAccessibilityOperation, timeout: Duration = .seconds(10)) async throws -> StageAccessibilityResult {
+        guard !closed, let socket else { throw StageControlError.disconnected }
+        let request = StageAccessibilityRequest(operation: operation)
+        let timer = Task {
+            do { try await Task.sleep(for: timeout) } catch { return }
+            await self.failAccessibility(request.id, error: StageControlError.timedOut("accessibility request"))
+        }
+        defer { timer.cancel() }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                accessibilityPending[request.id] = continuation
+                Task {
+                    do { try await socket.send(.accessibilityRequest(request)) }
+                    catch { await self.failAccessibility(request.id, error: error) }
+                }
+            }
+        } onCancel: {
+            Task { await self.failAccessibility(request.id, error: CancellationError()) }
+        }
+    }
+
+    private func failAccessibility(_ id: UUID, error: Error) { accessibilityPending.removeValue(forKey: id)?.resume(throwing: error) }
 
     private func handle(_ request: StageControlRequest) async {
         defer { requestTasks.removeValue(forKey: request.id) }
@@ -148,6 +175,9 @@ public actor StageControlClient {
         eventTask?.cancel()
         for task in requestTasks.values { task.cancel() }
         requestTasks.removeAll()
+        let waiters = Array(accessibilityPending.values)
+        accessibilityPending.removeAll()
+        waiters.forEach { $0.resume(throwing: StageControlError.disconnected) }
         await socket?.close()
         await host.controlDisconnected()
         machine.disconnected()

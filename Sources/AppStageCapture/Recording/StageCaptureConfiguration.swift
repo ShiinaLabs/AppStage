@@ -39,12 +39,14 @@ public struct StageCaptureConfiguration: Equatable, Sendable {
     public let frameRate: Int
     public let cursor: StageCaptureCursor
     public let framing: StageCaptureFraming
+    public let includesApplicationWindows: Bool
 
     public init(
         resolution: StageCaptureResolution = .fullHD,
         frameRate: Int = 60,
         cursor: StageCaptureCursor = .hidden,
-        framing: StageCaptureFraming
+        framing: StageCaptureFraming,
+        includesApplicationWindows: Bool = false
     ) throws {
         guard (1...240).contains(frameRate) else {
             throw StageCaptureConfigurationError.invalidFrameRate
@@ -72,5 +74,6 @@ public struct StageCaptureConfiguration: Equatable, Sendable {
         self.frameRate = frameRate
         self.cursor = cursor
         self.framing = framing
+        self.includesApplicationWindows = includesApplicationWindows
     }
 }

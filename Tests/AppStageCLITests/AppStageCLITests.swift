@@ -3,13 +3,21 @@ import XCTest
 @testable import AppStageCLI
 
 final class AppStageCLITests: XCTestCase {
-    func testRootHelpListsTheThreePhaseOneCommands() throws {
+    func testRootHelpListsScenarioRunAndCaptureCommands() throws {
         let result = try runCLI(["--help"])
 
         XCTAssertEqual(result.status, 0, result.standardError)
         XCTAssertTrue(result.standardOutput.contains("list"))
         XCTAssertTrue(result.standardOutput.contains("snapshot"))
         XCTAssertTrue(result.standardOutput.contains("record"))
+        XCTAssertTrue(result.standardOutput.contains("run"))
+    }
+
+    func testRunHelpExplainsUnrecordedScenarioExecution() throws {
+        let result = try runCLI(["run", "--help"])
+        XCTAssertEqual(result.status, 0, result.standardError)
+        XCTAssertTrue(result.standardOutput.contains("without recording video"))
+        XCTAssertTrue(result.standardOutput.contains("--scenario"))
     }
 
     func testRecordHelpIncludesTheRequiredScenarioAndOutputOptions() throws {

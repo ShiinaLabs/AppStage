@@ -19,21 +19,25 @@ public actor StageControlController {
     private var eventBacklog: [StageControlEvent] = []
     private var readTask: Task<Void, Never>?
     private var timeoutPhase: String?
+    public typealias AccessibilityHandler = @MainActor @Sendable (StageAccessibilityOperation, Int32) async -> StageAccessibilityResult
+    private var accessibilityHandler: AccessibilityHandler?
     private var closed = false
 
     public var state: StageControlState { machine.state }
     func isAcceptingConnections() async -> Bool { await listener.isAcceptingConnections }
 
-    public init(token: String, sessionID: UUID, bundleIdentifier: String) {
+    public init(token: String, sessionID: UUID, bundleIdentifier: String, accessibilityHandler: AccessibilityHandler? = nil) {
         self.token = token
         self.sessionID = sessionID
         self.bundleIdentifier = bundleIdentifier
+        self.accessibilityHandler = accessibilityHandler
     }
 
     public func start() async throws -> UInt16 { try await listener.start() }
 
     /// Bind the PID from the launched, concrete app instance before accepting hello.
     public func bindExpectedPID(_ pid: Int32) { expectedPID = pid }
+    public func setAccessibilityHandler(_ handler: @escaping AccessibilityHandler) { accessibilityHandler = handler }
 
     public func waitForHandshake(timeout: Duration = .seconds(30)) async throws {
         try await withTaskCancellationHandler {
@@ -173,12 +177,26 @@ public actor StageControlController {
                 switch message {
                 case let .response(response): resolve(response)
                 case let .event(event): receive(event)
+                case let .accessibilityRequest(request):
+                    Task { await self.handleAccessibility(request) }
                 default: throw StageControlError.invalidState("Unexpected host control message")
                 }
             }
         } catch {
             if !closed { await failConnection(error) }
         }
+    }
+
+    private func handleAccessibility(_ request: StageAccessibilityRequest) async {
+        guard let socket, let pid = expectedPID else { return }
+        let result: StageAccessibilityResult
+        if let accessibilityHandler {
+            result = await accessibilityHandler(request.operation, pid)
+        } else {
+            result = .failure("Accessibility controller is unavailable")
+        }
+        do { try await socket.send(.accessibilityResponse(.init(requestID: request.id, result: result))) }
+        catch { await failConnection(error) }
     }
 
     private func resolve(_ response: StageControlResponse) {

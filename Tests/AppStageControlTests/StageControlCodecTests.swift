@@ -13,6 +13,18 @@ final class StageControlCodecTests: XCTestCase {
         XCTAssertEqual(try decoder.append(Array(bytes.dropFirst(7))), [first, second])
     }
 
+    func testAccessibilityRequestAndResponseRoundTrip() throws {
+        let locator = StageAccessibilityLocator(role: "AXMenuItem", title: "Heatmap")
+        let request = StageControlMessage.accessibilityRequest(.init(operation: .press(locator)))
+        let response = StageControlMessage.accessibilityResponse(.init(
+            requestID: UUID(), result: .resolved(StageAccessibilityFrame(x: 10, y: 20, width: 30, height: 40))
+        ))
+        for message in [request, response] {
+            var decoder = StageControlFrameDecoder()
+            XCTAssertEqual(try decoder.append(StageControlCodec.encode(message)), [message])
+        }
+    }
+
     func testRejectsInvalidLengthAndOversize() throws {
         var decoder = StageControlFrameDecoder()
         XCTAssertThrowsError(try decoder.append([0, 0, 0, 0]))
