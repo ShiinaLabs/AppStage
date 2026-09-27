@@ -6,6 +6,12 @@ enum StageAppOwnership: Sendable, Equatable {
     case preexisting
 }
 
+enum StageExistingApplicationPolicy: Sendable {
+    case attach
+    case reject
+    case replace
+}
+
 @MainActor
 protocol StageApplicationHandle: AnyObject {
     var processIdentifier: pid_t { get }
@@ -56,23 +62,49 @@ final class StageAppSession {
         bundleIdentifier: String,
         arguments: [String],
         keepAppRunning: Bool = false,
+        existingApplicationPolicy: StageExistingApplicationPolicy = .attach,
         terminationGracePeriod: Duration = defaultTerminationGracePeriod,
         applicationManager: any StageApplicationManaging = SystemStageApplicationManager()
     ) async throws -> StageAppSession {
         let existing = applicationManager.runningApplications(bundleIdentifier: bundleIdentifier)
             .filter { $0.bundleIdentifier == bundleIdentifier && !$0.isTerminated }
-        if let application = existing.first {
-            return StageAppSession(
-                application: application,
-                bundleIdentifier: bundleIdentifier,
-                ownership: .preexisting,
-                keepAppRunning: keepAppRunning,
-                terminationGracePeriod: terminationGracePeriod
-            )
+        if !existing.isEmpty {
+            switch existingApplicationPolicy {
+            case .attach:
+                return StageAppSession(
+                    application: existing[0], bundleIdentifier: bundleIdentifier,
+                    ownership: .preexisting, keepAppRunning: keepAppRunning,
+                    terminationGracePeriod: terminationGracePeriod
+                )
+            case .reject:
+                throw StageAppSessionError.targetAlreadyRunning
+            case .replace:
+                for application in existing {
+                    let pid = application.processIdentifier
+                    application.terminate()
+                    if await application.waitUntilTerminated(gracePeriod: terminationGracePeriod) { continue }
+                    guard application.processIdentifier == pid,
+                          application.bundleIdentifier == bundleIdentifier,
+                          !application.isTerminated else { continue }
+                    application.forceTerminate()
+                    guard await application.waitUntilTerminated(gracePeriod: terminationGracePeriod) else {
+                        throw StageAppSessionError.couldNotReplace(pid)
+                    }
+                }
+                try Task.checkCancellation()
+            }
         }
 
         let application = try await applicationManager.launchApplication(at: appURL, arguments: arguments)
         guard application.bundleIdentifier == bundleIdentifier else {
+            let launchedPID = application.processIdentifier
+            let launchedBundleIdentifier = application.bundleIdentifier
+            await terminateExactInstance(
+                application,
+                processIdentifier: launchedPID,
+                bundleIdentifier: launchedBundleIdentifier,
+                gracePeriod: terminationGracePeriod
+            )
             throw StageAppSessionError.launchedBundleIdentifierMismatch(
                 expected: bundleIdentifier,
                 actual: application.bundleIdentifier
@@ -122,13 +154,37 @@ final class StageAppSession {
             && application.bundleIdentifier == bundleIdentifier
             && !application.isTerminated
     }
+
+    private static func terminateExactInstance(
+        _ application: any StageApplicationHandle,
+        processIdentifier: pid_t,
+        bundleIdentifier: String?,
+        gracePeriod: Duration
+    ) async {
+        guard application.processIdentifier == processIdentifier,
+              application.bundleIdentifier == bundleIdentifier,
+              !application.isTerminated else { return }
+        application.terminate()
+        guard !(await application.waitUntilTerminated(gracePeriod: gracePeriod)),
+              application.processIdentifier == processIdentifier,
+              application.bundleIdentifier == bundleIdentifier,
+              !application.isTerminated else { return }
+        application.forceTerminate()
+        _ = await application.waitUntilTerminated(gracePeriod: gracePeriod)
+    }
 }
 
 enum StageAppSessionError: LocalizedError {
     case launchedBundleIdentifierMismatch(expected: String, actual: String?)
+    case targetAlreadyRunning
+    case couldNotReplace(pid_t)
 
     var errorDescription: String? {
         switch self {
+        case .targetAlreadyRunning:
+            return "Target application is already running outside this AppStage control session. Quit it first or use --replace-existing."
+        case let .couldNotReplace(pid):
+            return "Could not stop existing target application (PID \(pid))."
         case let .launchedBundleIdentifierMismatch(expected, actual):
             return "Launched app bundle identifier did not match target (expected \(expected), got \(actual ?? "none"))."
         }

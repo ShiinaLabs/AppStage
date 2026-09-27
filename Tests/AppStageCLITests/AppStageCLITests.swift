@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+@testable import AppStageCLI
 
 final class AppStageCLITests: XCTestCase {
     func testRootHelpListsTheThreePhaseOneCommands() throws {
@@ -29,6 +30,29 @@ final class AppStageCLITests: XCTestCase {
         XCTAssertTrue(result.standardOutput.contains("Keep an application launched by AppStage running"))
         XCTAssertTrue(result.standardOutput.contains("Pre-existing applications are"))
         XCTAssertTrue(result.standardOutput.contains("never terminated."))
+    }
+
+    func testRecordHelpExplainsControlledCompletionAndReplacement() throws {
+        let result = try runCLI(["record", "--help"])
+        XCTAssertEqual(result.status, 0, result.standardError)
+        XCTAssertTrue(result.standardOutput.contains("--timeout"))
+        XCTAssertTrue(result.standardOutput.contains("--replace-existing"))
+        XCTAssertTrue(result.standardOutput.contains("--duration"))
+        XCTAssertTrue(result.standardOutput.contains("finished"))
+    }
+
+    func testRecordParsesTimeoutReplacementAndLegacyDuration() throws {
+        let command = try RecordCommand.parse([
+            "--app", "/Applications/Example.app",
+            "--scenario", "example",
+            "--output", "/tmp/example.mov",
+            "--timeout", "42",
+            "--duration", "12",
+            "--replace-existing",
+        ])
+        XCTAssertEqual(command.timeout, 42)
+        XCTAssertEqual(command.duration, 12)
+        XCTAssertTrue(command.replaceExisting)
     }
 
     func testSnapshotHelpIncludesBundleIdentifierAndOutputOptions() throws {

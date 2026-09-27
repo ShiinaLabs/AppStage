@@ -32,6 +32,7 @@ let package = Package(
                 "AppStage",
                 "AppStageMac",
                 "AppStageCapture",
+                "AppStageControl",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),

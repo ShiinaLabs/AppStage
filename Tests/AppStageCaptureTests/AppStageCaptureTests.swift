@@ -127,6 +127,16 @@ final class AppStageCaptureTests: XCTestCase {
         XCTAssertFalse(StageVideoFrameStatus.isComplete(nil))
     }
 
+    func testRecorderFirstFrameReadinessWaitsUntilACompleteFrameArrives() async throws {
+        let readiness = StageVideoFrameReadiness()
+        let waiter = Task { try await readiness.wait(timeout: .seconds(5)) }
+        while await readiness.waiterCount == 0 { await Task.yield() }
+
+        await readiness.signalFrameAccepted()
+
+        try await waiter.value
+    }
+
     func testRecorderLifecycleRejectsStopWhileStartingAndDuplicateStop() throws {
         var lifecycle = StageVideoRecorderLifecycle()
 

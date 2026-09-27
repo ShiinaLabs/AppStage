@@ -44,6 +44,50 @@ final class StageAppSessionTests: XCTestCase {
         XCTAssertEqual(manager.launchCount, 0)
     }
 
+    func testControlledOpenRejectsPreexistingAppWithoutTerminatingIt() async throws {
+        let app = FakeApplication(pid: 48, bundleIdentifier: bundleID)
+        let manager = FakeApplicationManager(running: [app])
+        do {
+            _ = try await StageAppSession.open(
+                appURL: appURL, bundleIdentifier: bundleID, arguments: [],
+                existingApplicationPolicy: .reject, applicationManager: manager
+            )
+            XCTFail("Expected rejection")
+        } catch StageAppSessionError.targetAlreadyRunning {
+            XCTAssertTrue(app.events.isEmpty)
+            XCTAssertEqual(manager.launchCount, 0)
+        }
+    }
+
+    func testReplaceTerminatesExistingInstanceBeforeLaunchingOwnedInstance() async throws {
+        let events = EventLog()
+        let existing = FakeApplication(pid: 49, bundleIdentifier: bundleID, eventLog: events)
+        let replacement = FakeApplication(pid: 50, bundleIdentifier: bundleID, eventLog: events)
+        let manager = FakeApplicationManager(running: [existing], launched: replacement, eventLog: events)
+        let session = try await StageAppSession.open(
+            appURL: appURL, bundleIdentifier: bundleID, arguments: [],
+            existingApplicationPolicy: .replace, applicationManager: manager
+        )
+        XCTAssertEqual(session.ownership, .launchedByAppStage)
+        XCTAssertEqual(events.values, ["terminate", "wait", "launch"])
+        await session.finish()
+        XCTAssertEqual(events.values, ["terminate", "wait", "launch", "terminate", "wait"])
+    }
+
+    func testBundleMismatchCleansUpExactInstanceThatWasJustLaunched() async throws {
+        let app = FakeApplication(pid: 51, bundleIdentifier: "com.example.other")
+        let manager = FakeApplicationManager(launched: app)
+        do {
+            _ = try await StageAppSession.open(
+                appURL: appURL, bundleIdentifier: bundleID, arguments: [],
+                applicationManager: manager
+            )
+            XCTFail("Expected bundle identifier mismatch")
+        } catch StageAppSessionError.launchedBundleIdentifierMismatch {
+            XCTAssertEqual(app.events, ["terminate", "wait"])
+        }
+    }
+
     func testKeepAppRunningSkipsTerminationForOwnedApp() async throws {
         let app = FakeApplication(pid: 43, bundleIdentifier: bundleID)
         let session = try await StageAppSession.open(
@@ -156,15 +200,18 @@ private final class FakeApplicationManager: StageApplicationManaging {
     private let running: [any StageApplicationHandle]
     private let launched: any StageApplicationHandle
     private(set) var launchCount = 0
+    private let eventLog: EventLog?
 
-    init(running: [any StageApplicationHandle] = [], launched: any StageApplicationHandle? = nil) {
+    init(running: [any StageApplicationHandle] = [], launched: any StageApplicationHandle? = nil, eventLog: EventLog? = nil) {
         self.running = running
         self.launched = launched ?? FakeApplication(pid: 99, bundleIdentifier: "com.example.fixture")
+        self.eventLog = eventLog
     }
 
     func runningApplications(bundleIdentifier: String) -> [any StageApplicationHandle] { running }
     func launchApplication(at url: URL, arguments: [String]) async throws -> any StageApplicationHandle {
         launchCount += 1
+        eventLog?.append("launch")
         return launched
     }
 }

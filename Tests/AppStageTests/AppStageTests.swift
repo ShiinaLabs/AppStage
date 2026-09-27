@@ -68,6 +68,35 @@ final class AppStageTests: XCTestCase {
             XCTAssertEqual(error as? StageLaunchConfigurationError, .duplicateOption("--appstage-scenario"))
         }
     }
+    func testLaunchConfigurationParsesCompleteControlEndpoint() throws {
+        let id = UUID()
+        let configuration = try StageLaunchConfiguration(arguments: [
+            "--appstage-control-host", "127.0.0.1",
+            "--appstage-control-port", "49152",
+            "--appstage-control-token", "secret",
+            "--appstage-control-session", id.uuidString,
+        ])
+        XCTAssertEqual(configuration.controlHost, "127.0.0.1")
+        XCTAssertEqual(configuration.controlPort, 49152)
+        XCTAssertEqual(configuration.controlToken, "secret")
+        XCTAssertEqual(configuration.controlSession, id)
+    }
+
+    func testLaunchConfigurationRejectsPartialAndInvalidControlEndpoint() {
+        XCTAssertThrowsError(try StageLaunchConfiguration(arguments: ["--appstage-control-host", "127.0.0.1"]))
+        XCTAssertThrowsError(try StageLaunchConfiguration(arguments: [
+            "--appstage-control-host", "127.0.0.1", "--appstage-control-port", "0",
+            "--appstage-control-token", "secret", "--appstage-control-session", UUID().uuidString,
+        ]))
+        XCTAssertThrowsError(try StageLaunchConfiguration(arguments: [
+            "--appstage-control-host", "127.0.0.1", "--appstage-control-port", "1000",
+            "--appstage-control-token", "secret", "--appstage-control-session", "not-a-uuid",
+        ]))
+        XCTAssertThrowsError(try StageLaunchConfiguration(arguments: [
+            "--appstage-control-host", "0.0.0.0", "--appstage-control-port", "1000",
+            "--appstage-control-token", "secret", "--appstage-control-session", UUID().uuidString,
+        ]))
+    }
     func testSequenceUsesTheLatestStepAtOrBeforeTheRequestedTime() {
         let sequence = StageSequence([
             .init(at: .seconds(2), value: "C"),

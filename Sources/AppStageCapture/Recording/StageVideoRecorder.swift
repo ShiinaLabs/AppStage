@@ -10,6 +10,7 @@ public enum StageVideoRecorderError: Error, Equatable {
     case notStarted
     case outputAlreadyExists
     case writerSetupFailed(String)
+    case firstFrameTimedOut
     case noVideoFrames
     case writingFailed(String)
 }
@@ -27,6 +28,7 @@ public actor StageVideoRecorder {
     private var filterRefreshTask: Task<Void, Never>?
     private var filterRefreshFailure: String?
     private var lifecycle = StageVideoRecorderLifecycle()
+    private var ownsOutputFile = false
 
     public init(
         window: StageCaptureWindow,
@@ -53,9 +55,7 @@ public actor StageVideoRecorder {
                 try? await stream.stopCapture()
             }
             writer?.cancelWriting()
-            if writer != nil {
-                try? FileManager.default.removeItem(at: outputURL)
-            }
+            discardOutputIfOwned()
             self.stream = nil
             self.writer = nil
             self.sampleOutput = nil
@@ -116,7 +116,12 @@ public actor StageVideoRecorder {
         }
         assetWriter.add(writerInput)
         let filter = try await StageCaptureDiscovery.displayFilter(display: display, including: window)
-        let output = StageVideoSampleWriter(writer: assetWriter, input: writerInput)
+        let readiness = StageVideoFrameReadiness()
+        let output = StageVideoSampleWriter(
+            writer: assetWriter,
+            input: writerInput,
+            frameReadiness: readiness
+        )
         let captureStream = SCStream(filter: filter, configuration: streamConfiguration, delegate: nil)
         try captureStream.addStreamOutput(
             output,
@@ -134,8 +139,17 @@ public actor StageVideoRecorder {
                 assetWriter.error?.localizedDescription ?? "AVAssetWriter could not start."
             )
         }
+        ownsOutputFile = true
 
         try await captureStream.startCapture()
+        try await output.waitForFirstFrame(timeout: .seconds(5))
+    }
+
+    /// Removes only a MOV whose writer was successfully started by this recorder.
+    public func discardOutputIfOwned() {
+        guard ownsOutputFile else { return }
+        try? FileManager.default.removeItem(at: outputURL)
+        ownsOutputFile = false
     }
 
     public func stop() async throws {
@@ -156,7 +170,7 @@ public actor StageVideoRecorder {
             self.stream = nil
             self.writer = nil
             self.sampleOutput = nil
-            try? FileManager.default.removeItem(at: outputURL)
+            discardOutputIfOwned()
             throw StageVideoRecorderError.writingFailed("Capture filter refresh failed: \(filterRefreshFailure)")
         }
 
@@ -167,7 +181,7 @@ public actor StageVideoRecorder {
             self.stream = nil
             self.writer = nil
             self.sampleOutput = nil
-            try? FileManager.default.removeItem(at: outputURL)
+            discardOutputIfOwned()
             throw error
         }
 
@@ -183,19 +197,20 @@ public actor StageVideoRecorder {
         self.sampleOutput = nil
 
         if let sampleError = sampleOutput.failureDescription {
-            try? FileManager.default.removeItem(at: outputURL)
+            discardOutputIfOwned()
             throw StageVideoRecorderError.writingFailed(sampleError)
         }
         guard sampleOutput.didCaptureVideo else {
-            try? FileManager.default.removeItem(at: outputURL)
+            discardOutputIfOwned()
             throw StageVideoRecorderError.noVideoFrames
         }
         guard writer.status == .completed else {
-            try? FileManager.default.removeItem(at: outputURL)
+            discardOutputIfOwned()
             throw StageVideoRecorderError.writingFailed(
                 writer.error?.localizedDescription ?? "AVAssetWriter did not finish the MOV."
             )
         }
+        ownsOutputFile = false
     }
 
     private func startFilterRefresh() {
@@ -237,16 +252,19 @@ private final class StageVideoSampleWriter: NSObject, SCStreamOutput, @unchecked
     private let lock = NSLock()
     private let writer: AVAssetWriter
     private let input: AVAssetWriterInput
+    private let frameReadiness: StageVideoFrameReadiness
     private var didStartSession = false
+    private var didAppendFrame = false
     private var storedFailureDescription: String?
 
-    init(writer: AVAssetWriter, input: AVAssetWriterInput) {
+    init(writer: AVAssetWriter, input: AVAssetWriterInput, frameReadiness: StageVideoFrameReadiness) {
         self.writer = writer
         self.input = input
+        self.frameReadiness = frameReadiness
     }
 
     var didCaptureVideo: Bool {
-        lock.withLock { didStartSession }
+        lock.withLock { didAppendFrame }
     }
 
     var failureDescription: String? {
@@ -255,6 +273,10 @@ private final class StageVideoSampleWriter: NSObject, SCStreamOutput, @unchecked
 
     func finishInput() {
         lock.withLock { input.markAsFinished() }
+    }
+
+    func waitForFirstFrame(timeout: Duration) async throws {
+        try await frameReadiness.wait(timeout: timeout)
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
@@ -271,18 +293,22 @@ private final class StageVideoSampleWriter: NSObject, SCStreamOutput, @unchecked
             return
         }
 
-        lock.withLock {
+        let accepted = lock.withLock { () -> Bool in
             let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
             if !didStartSession {
                 writer.startSession(atSourceTime: presentationTime)
                 didStartSession = true
             }
 
-            guard input.isReadyForMoreMediaData else { return }
+            guard input.isReadyForMoreMediaData else { return false }
             guard input.append(sampleBuffer) else {
                 storedFailureDescription = writer.error?.localizedDescription ?? "The video frame could not be appended."
-                return
+                return false
             }
+            guard !didAppendFrame else { return false }
+            didAppendFrame = true
+            return true
         }
+        if accepted { Task { await frameReadiness.signalFrameAccepted() } }
     }
 }

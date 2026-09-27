@@ -1,5 +1,7 @@
 import AppKit
+import AppStage
 import AppStageCapture
+import AppStageControl
 import ArgumentParser
 import Foundation
 
@@ -87,8 +89,11 @@ struct RecordCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Scenario identifier passed to the target app.")
     var scenario: String
 
-    @Option(name: .long, help: "Recording duration in seconds.")
+    @Option(name: .long, help: "Deprecated; ignored for controlled scenarios, which end on the host finished event.")
     var duration: Int = 10
+
+    @Option(name: .long, help: "Timeout in seconds for handshake, prepare, and scenario completion (default: 30).")
+    var timeout: Int = 30
 
     @Option(name: .long, help: "MOV output path.")
     var output: String
@@ -105,9 +110,15 @@ struct RecordCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Keep an application launched by AppStage running after capture finishes. Pre-existing applications are never terminated.")
     var keepAppRunning = false
 
+    @Flag(name: .long, help: "Terminate an already running target app and launch a new controlled instance.")
+    var replaceExisting = false
+
     func run() async throws {
         guard (1...600).contains(duration) else {
             throw ValidationError("--duration must be between 1 and 600 seconds.")
+        }
+        guard (1...600).contains(timeout) else {
+            throw ValidationError("--timeout must be between 1 and 600 seconds.")
         }
         guard horizontalMargin.isFinite, verticalMargin.isFinite,
               horizontalMargin >= 0, verticalMargin >= 0
@@ -150,39 +161,44 @@ struct RecordCommand: AsyncParsableCommand {
             )
         )
 
-        let captureTask = Task {
-            let session = try await StageAppSession.open(
-                appURL: applicationURL,
-                bundleIdentifier: applicationBundleID,
-                arguments: [
-                    "--appstage-scenario", scenario,
-                    "--appstage-autoplay",
-                    "--appstage-window", "1100x760",
-                ],
-                keepAppRunning: keepAppRunning
-            )
-            try await session.performCapture {
-                let window = try await waitForWindow(
-                    bundleIdentifier: session.bundleIdentifier,
-                    processIdentifier: session.processIdentifier
-                )
-                try await Task.sleep(for: .seconds(1))
-                let targetDisplay = try await display(for: window)
-                let recorder = StageVideoRecorder(
-                    window: window,
-                    display: targetDisplay,
-                    configuration: captureConfiguration,
-                    outputURL: outputURL
-                )
-                do {
-                    try await recorder.start()
-                    try await Task.sleep(for: .seconds(duration))
-                    try await recorder.stop()
-                } catch {
-                    try? await recorder.stop()
-                    throw error
+        let captureTask = Task { @MainActor in
+            let token = try StageControlToken.generate()
+            let sessionID = UUID()
+            let workflow = StageRecordWorkflow(
+                controller: StageSystemRecordController(
+                    underlying: StageControlController(
+                        token: token, sessionID: sessionID, bundleIdentifier: applicationBundleID
+                    )
+                ),
+                openSession: { arguments, policy in
+                    try await StageAppSession.open(
+                        appURL: applicationURL,
+                        bundleIdentifier: applicationBundleID,
+                        arguments: arguments,
+                        keepAppRunning: keepAppRunning,
+                        existingApplicationPolicy: policy
+                    )
+                },
+                makeRecorder: { pid, bundleID in
+                    let window = try await waitForWindow(
+                        bundleIdentifier: bundleID,
+                        processIdentifier: pid,
+                        timeout: .seconds(timeout)
+                    )
+                    let targetDisplay = try await display(for: window)
+                    return StageSystemRecordRecorder(underlying: StageVideoRecorder(
+                        window: window,
+                        display: targetDisplay,
+                        configuration: captureConfiguration,
+                        outputURL: outputURL
+                    ))
                 }
-            }
+            )
+            try await workflow.run(
+                scenarioID: StageScenarioID(scenario), bundleIdentifier: applicationBundleID,
+                token: token, sessionID: sessionID, timeout: .seconds(timeout),
+                existingApplicationPolicy: replaceExisting ? .replace : .reject
+            )
         }
         let signalCancellation = StageRecordSignalCancellation(task: captureTask)
         defer { signalCancellation.cancel() }
@@ -192,7 +208,7 @@ struct RecordCommand: AsyncParsableCommand {
             throw ValidationError("Recording cancelled.")
         }
 
-        print("Wrote \(duration)s MOV to \(outputURL.path)")
+        print("Wrote MOV to \(outputURL.path)")
     }
 }
 
@@ -224,10 +240,11 @@ private func display(for window: StageCaptureWindow) async throws -> StageCaptur
 
 private func waitForWindow(
     bundleIdentifier: String,
-    processIdentifier: pid_t
+    processIdentifier: pid_t,
+    timeout: Duration
 ) async throws -> StageCaptureWindow {
     let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: .seconds(30))
+    let deadline = clock.now.advanced(by: timeout)
     while clock.now < deadline {
         do {
             return try await StageCaptureDiscovery.window(
