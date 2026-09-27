@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreVideo
 import Foundation
 import ScreenCaptureKit
 import XCTest
@@ -124,6 +125,74 @@ final class AppStageCaptureTests: XCTestCase {
         ))
     }
 
+    func testCanvasImageDimensionsDetermineCaptureResolution() throws {
+        let backgroundURL = try makePNG(width: 640, height: 360, red: 0.2, green: 0.3, blue: 0.4)
+        defer { try? FileManager.default.removeItem(at: backgroundURL.deletingLastPathComponent()) }
+        let canvas = try StageCanvasConfiguration(backgroundImageURL: backgroundURL)
+
+        let configuration = try StageCaptureConfiguration(
+            framing: .desktopAroundWindow(horizontalMargin: 220, verticalMargin: 120),
+            canvas: canvas
+        )
+
+        XCTAssertEqual(canvas.pixelWidth, 640)
+        XCTAssertEqual(canvas.pixelHeight, 360)
+        XCTAssertEqual(configuration.resolution, .custom(width: 640, height: 360))
+    }
+
+    func testCanvasConfigurationRejectsUndecodableAndOddSizedImages() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let imageURL = directory.appending(path: "invalid.png")
+        try Data("not an image".utf8).write(to: imageURL)
+
+        XCTAssertThrowsError(try StageCanvasConfiguration(backgroundImageURL: imageURL)) {
+            XCTAssertEqual($0 as? StageCanvasConfigurationError, .backgroundImageCouldNotBeDecoded)
+        }
+
+        let oddImageURL = try makePNG(width: 5, height: 4, red: 0.2, green: 0.3, blue: 0.4)
+        defer { try? FileManager.default.removeItem(at: oddImageURL.deletingLastPathComponent()) }
+        XCTAssertThrowsError(try StageCanvasConfiguration(backgroundImageURL: oddImageURL)) {
+            XCTAssertEqual($0 as? StageCanvasConfigurationError, .dimensionsMustBeEven)
+        }
+    }
+
+    func testFrameCompositorPreservesBackgroundThroughTransparentPixelsAndOverlaysOpaquePixels() throws {
+        let imageURL = try makePNG(width: 2, height: 2, red: 0, green: 0, blue: 1)
+        defer { try? FileManager.default.removeItem(at: imageURL.deletingLastPathComponent()) }
+        let canvas = try StageCanvasConfiguration(backgroundImageURL: imageURL)
+        let compositor = try StageFrameCompositor(canvas: canvas)
+        let attributes: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: 2,
+            kCVPixelBufferHeightKey as String: 2,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+        ]
+        var pool: CVPixelBufferPool?
+        XCTAssertEqual(CVPixelBufferPoolCreate(kCFAllocatorDefault, nil, attributes as CFDictionary, &pool), kCVReturnSuccess)
+        var source: CVPixelBuffer?
+        XCTAssertEqual(CVPixelBufferCreate(kCFAllocatorDefault, 2, 2, kCVPixelFormatType_32BGRA, attributes as CFDictionary, &source), kCVReturnSuccess)
+        let sourceBuffer = try XCTUnwrap(source)
+        let bufferPool = try XCTUnwrap(pool)
+
+        try fill(sourceBuffer, bgra: (0, 0, 0, 0))
+        let transparentComposite = try compositor.composite(source: sourceBuffer, pixelBufferPool: bufferPool)
+        let transparentPixel = try pixel(transparentComposite)
+        XCTAssertEqual(transparentPixel.0, 255)
+        XCTAssertEqual(transparentPixel.1, 0)
+        XCTAssertEqual(transparentPixel.2, 0)
+        XCTAssertEqual(transparentPixel.3, 255)
+
+        try fill(sourceBuffer, bgra: (0, 0, 255, 255))
+        let opaqueComposite = try compositor.composite(source: sourceBuffer, pixelBufferPool: bufferPool)
+        let opaquePixel = try pixel(opaqueComposite)
+        XCTAssertEqual(opaquePixel.0, 0)
+        XCTAssertEqual(opaquePixel.1, 0)
+        XCTAssertEqual(opaquePixel.2, 255)
+        XCTAssertEqual(opaquePixel.3, 255)
+    }
+
     func testVideoFrameStatusAcceptsOnlyCompleteFrames() {
         XCTAssertTrue(StageVideoFrameStatus.isComplete(SCFrameStatus.complete.rawValue))
         XCTAssertFalse(StageVideoFrameStatus.isComplete(SCFrameStatus.idle.rawValue))
@@ -141,6 +210,18 @@ final class AppStageCaptureTests: XCTestCase {
         await readiness.signalFrameAccepted()
 
         try await waiter.value
+    }
+
+    func testRecorderFirstFrameReadinessPropagatesCanvasFailure() async {
+        let readiness = StageVideoFrameReadiness()
+        await readiness.signalFailure("Canvas render failed.")
+
+        do {
+            try await readiness.wait(timeout: .seconds(5))
+            XCTFail("Expected the canvas failure to fail first-frame readiness.")
+        } catch {
+            XCTAssertEqual(error as? StageVideoRecorderError, .writingFailed("Canvas render failed."))
+        }
     }
 
     func testRecorderLifecycleRejectsStopWhileStartingAndDuplicateStop() throws {
@@ -161,5 +242,52 @@ final class AppStageCaptureTests: XCTestCase {
         XCTAssertThrowsError(try lifecycle.beginStart()) {
             XCTAssertEqual($0 as? StageVideoRecorderError, .alreadyStarted)
         }
+    }
+
+    private func makePNG(width: Int, height: Int, red: CGFloat, green: CGFloat, blue: CGFloat) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
+        let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        context.setFillColor(red: red, green: green, blue: blue, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let imageURL = directory.appending(path: "background.png")
+        try StageScreenshot.writePNG(context.makeImage()!, to: imageURL)
+        return imageURL
+    }
+
+    private func fill(_ pixelBuffer: CVPixelBuffer, bgra: (UInt8, UInt8, UInt8, UInt8)) throws {
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        let rowBytes = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        let bytes = try XCTUnwrap(CVPixelBufferGetBaseAddress(pixelBuffer)).assumingMemoryBound(to: UInt8.self)
+        for y in 0..<height {
+            for x in 0..<width {
+                let offset = y * rowBytes + x * 4
+                bytes[offset] = bgra.0
+                bytes[offset + 1] = bgra.1
+                bytes[offset + 2] = bgra.2
+                bytes[offset + 3] = bgra.3
+            }
+        }
+    }
+
+    private func pixel(_ pixelBuffer: CVPixelBuffer) throws -> (UInt8, UInt8, UInt8, UInt8) {
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+        let bytes = try XCTUnwrap(CVPixelBufferGetBaseAddress(pixelBuffer)).assumingMemoryBound(to: UInt8.self)
+        let offset = (CVPixelBufferGetHeight(pixelBuffer) / 2) * CVPixelBufferGetBytesPerRow(pixelBuffer)
+            + (CVPixelBufferGetWidth(pixelBuffer) / 2) * 4
+        return (bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3])
     }
 }

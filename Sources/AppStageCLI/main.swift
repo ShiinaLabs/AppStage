@@ -270,6 +270,9 @@ struct RecordCommand: AsyncParsableCommand {
     @Option(name: .long, help: "MOV output path.")
     var output: String
 
+    @Option(name: .long, help: "Background image used as the final video canvas.")
+    var backgroundImage: String?
+
     @Option(name: .long, help: "Horizontal desktop margin in points.")
     var horizontalMargin: Double = 220
 
@@ -324,14 +327,28 @@ struct RecordCommand: AsyncParsableCommand {
             throw ValidationError("The output file already exists: \(outputURL.path)")
         }
 
+        let canvas: StageCanvasConfiguration?
+        if let backgroundImage {
+            let backgroundURL = URL(fileURLWithPath: backgroundImage).standardizedFileURL
+            do {
+                canvas = try StageCanvasConfiguration(backgroundImageURL: backgroundURL)
+            } catch let error as LocalizedError {
+                throw ValidationError(error.errorDescription ?? "Background image could not be decoded.")
+            }
+        } else {
+            canvas = nil
+        }
+
         let captureConfiguration = try StageCaptureConfiguration(
+            resolution: canvas?.resolution,
             frameRate: frameRate,
             cursor: .hidden,
             framing: .desktopAroundWindow(
                 horizontalMargin: CGFloat(horizontalMargin),
                 verticalMargin: CGFloat(verticalMargin)
             ),
-            includesApplicationWindows: true
+            includesApplicationWindows: true,
+            canvas: canvas
         )
 
         let captureTask = Task { @MainActor in

@@ -27,6 +27,7 @@ final class AppStageCLITests: XCTestCase {
         XCTAssertTrue(result.standardOutput.contains("--app"))
         XCTAssertTrue(result.standardOutput.contains("--scenario"))
         XCTAssertTrue(result.standardOutput.contains("--output"))
+        XCTAssertTrue(result.standardOutput.contains("--background-image"))
         XCTAssertTrue(result.standardOutput.contains("--duration"))
     }
 
@@ -61,6 +62,17 @@ final class AppStageCLITests: XCTestCase {
         XCTAssertEqual(command.timeout, 42)
         XCTAssertEqual(command.duration, 12)
         XCTAssertTrue(command.replaceExisting)
+    }
+
+    func testRecordParsesOptionalBackgroundImage() throws {
+        let command = try RecordCommand.parse([
+            "--app", "/Applications/Example.app",
+            "--scenario", "example",
+            "--output", "/tmp/example.mov",
+            "--background-image", "/tmp/background.png",
+        ])
+
+        XCTAssertEqual(command.backgroundImage, "/tmp/background.png")
     }
 
     func testSnapshotHelpIncludesBundleIdentifierAndOutputOptions() throws {

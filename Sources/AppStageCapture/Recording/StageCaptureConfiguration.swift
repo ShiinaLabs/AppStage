@@ -32,6 +32,7 @@ public enum StageCaptureConfigurationError: Error, Equatable {
     case invalidFrameRate
     case invalidResolution
     case invalidFraming
+    case canvasResolutionMismatch
 }
 
 public struct StageCaptureConfiguration: Equatable, Sendable {
@@ -40,25 +41,32 @@ public struct StageCaptureConfiguration: Equatable, Sendable {
     public let cursor: StageCaptureCursor
     public let framing: StageCaptureFraming
     public let includesApplicationWindows: Bool
+    public let canvas: StageCanvasConfiguration?
 
     public init(
-        resolution: StageCaptureResolution = .fullHD,
+        resolution: StageCaptureResolution? = nil,
         frameRate: Int = 60,
         cursor: StageCaptureCursor = .hidden,
         framing: StageCaptureFraming,
-        includesApplicationWindows: Bool = false
+        includesApplicationWindows: Bool = false,
+        canvas: StageCanvasConfiguration? = nil
     ) throws {
         guard (1...240).contains(frameRate) else {
             throw StageCaptureConfigurationError.invalidFrameRate
         }
 
-        let dimensions = resolution.dimensions
+        let resolvedResolution = resolution ?? canvas?.resolution ?? .fullHD
+        let dimensions = resolvedResolution.dimensions
         guard dimensions.width >= 2,
               dimensions.height >= 2,
               dimensions.width.isMultiple(of: 2),
               dimensions.height.isMultiple(of: 2)
         else {
             throw StageCaptureConfigurationError.invalidResolution
+        }
+        if let canvas,
+           (dimensions.width != canvas.pixelWidth || dimensions.height != canvas.pixelHeight) {
+            throw StageCaptureConfigurationError.canvasResolutionMismatch
         }
 
         switch framing {
@@ -70,10 +78,11 @@ public struct StageCaptureConfiguration: Equatable, Sendable {
             }
         }
 
-        self.resolution = resolution
+        self.resolution = resolvedResolution
         self.frameRate = frameRate
         self.cursor = cursor
         self.framing = framing
         self.includesApplicationWindows = includesApplicationWindows
+        self.canvas = canvas
     }
 }
