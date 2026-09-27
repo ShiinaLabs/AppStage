@@ -88,7 +88,7 @@ public actor StageVideoRecorder {
         )
 
         let dimensions = configuration.resolution.dimensions
-        let sourceRect = try StageCaptureGeometry.captureRect(
+        let sourceRect = try StageCaptureGeometry.strictCaptureRect(
             windowFrame: window.frame,
             displayFrame: display.frame,
             framing: configuration.framing
@@ -262,9 +262,11 @@ public actor StageVideoRecorder {
                 writer.error?.localizedDescription ?? "AVAssetWriter did not finish the MOV."
             )
         }
+        ownsOutputFile = false
     }
 
     private func startFilterRefresh() {
+        guard !configuration.includesApplicationWindows else { return }
         guard let stream else { return }
         let display = self.display
         let window = self.window
@@ -368,6 +370,7 @@ private final class StageVideoSampleWriter: NSObject, SCStreamOutput, @unchecked
             return
         }
 
+        let sourceBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
         let result = lock.withLock { () -> Result in
             if storedFailureDescription != nil { return .skipped }
             if writer.status == .failed {
@@ -380,17 +383,13 @@ private final class StageVideoSampleWriter: NSObject, SCStreamOutput, @unchecked
                 didStartSession = true
             }
 
-            let sourceBuffer: CVPixelBuffer?
-            if frameCompositor != nil {
-                guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-                    return failLocked(StageFrameCompositorError.sourceFrameUnavailable.localizedDescription)
-                }
-                sourceBuffer = buffer
-            } else {
-                sourceBuffer = nil
+            guard sourceBuffer != nil else {
+                return failLocked(StageFrameCompositorError.sourceFrameUnavailable.localizedDescription)
             }
 
-            guard input.isReadyForMoreMediaData else { return .skipped }
+            guard input.isReadyForMoreMediaData else {
+                return failLocked("Video writer could not keep up with captured frames.")
+            }
             let didAppend: Bool
             if let frameCompositor, let pixelBufferAdaptor {
                 guard let sourceBuffer else { return .skipped }

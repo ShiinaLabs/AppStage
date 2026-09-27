@@ -36,6 +36,27 @@ final class AppStageCaptureTests: XCTestCase {
         )
     }
 
+    func testApplicationFilterLookupRequiresMatchingPIDAndBundleIdentifier() {
+        XCTAssertTrue(StageCaptureDiscovery.applicationMatches(
+            processIdentifier: 42,
+            bundleIdentifier: "com.example.demo",
+            expectedProcessIdentifier: 42,
+            expectedBundleIdentifier: "com.example.demo"
+        ))
+        XCTAssertFalse(StageCaptureDiscovery.applicationMatches(
+            processIdentifier: 43,
+            bundleIdentifier: "com.example.demo",
+            expectedProcessIdentifier: 42,
+            expectedBundleIdentifier: "com.example.demo"
+        ))
+        XCTAssertFalse(StageCaptureDiscovery.applicationMatches(
+            processIdentifier: 42,
+            bundleIdentifier: "com.example.other",
+            expectedProcessIdentifier: 42,
+            expectedBundleIdentifier: "com.example.demo"
+        ))
+    }
+
     func testDesktopAroundWindowReturnsDisplayRelativeRectIncludingMargins() throws {
         let rect = try StageCaptureGeometry.captureRect(
             windowFrame: CGRect(x: 2_120, y: 200, width: 1_000, height: 700),
@@ -73,6 +94,46 @@ final class AppStageCaptureTests: XCTestCase {
             framing: .desktopAroundWindow(horizontalMargin: 10, verticalMargin: 10)
         )) { error in
             XCTAssertEqual(error as? StageCaptureGeometryError, .windowOutsideDisplay)
+        }
+    }
+
+    func testStrictCaptureRectAcceptsWindowAndMarginsFullyInsideDisplay() throws {
+        let rect = try StageCaptureGeometry.strictCaptureRect(
+            windowFrame: CGRect(x: 400, y: 250, width: 800, height: 500),
+            displayFrame: CGRect(x: 0, y: 0, width: 1_920, height: 1_080),
+            framing: .desktopAroundWindow(horizontalMargin: 220, verticalMargin: 120)
+        )
+
+        XCTAssertEqual(rect, CGRect(x: 180, y: 130, width: 1_240, height: 740))
+    }
+
+    func testStrictCaptureRectRejectsClippedLeftMargin() {
+        XCTAssertThrowsError(try StageCaptureGeometry.strictCaptureRect(
+            windowFrame: CGRect(x: 100, y: 200, width: 900, height: 600),
+            displayFrame: CGRect(x: 0, y: 0, width: 1_920, height: 1_080),
+            framing: .desktopAroundWindow(horizontalMargin: 220, verticalMargin: 100)
+        )) { error in
+            XCTAssertEqual(error as? StageCaptureGeometryError, .framingOutsideDisplay)
+        }
+    }
+
+    func testStrictCaptureRectRejectsClippedRightMargin() {
+        XCTAssertThrowsError(try StageCaptureGeometry.strictCaptureRect(
+            windowFrame: CGRect(x: 1_010, y: 200, width: 800, height: 600),
+            displayFrame: CGRect(x: 0, y: 0, width: 1_920, height: 1_080),
+            framing: .desktopAroundWindow(horizontalMargin: 120, verticalMargin: 100)
+        )) { error in
+            XCTAssertEqual(error as? StageCaptureGeometryError, .framingOutsideDisplay)
+        }
+    }
+
+    func testStrictCaptureRectRejectsWindowSpanningDisplayBounds() {
+        XCTAssertThrowsError(try StageCaptureGeometry.strictCaptureRect(
+            windowFrame: CGRect(x: 1_800, y: 200, width: 300, height: 600),
+            displayFrame: CGRect(x: 0, y: 0, width: 1_920, height: 1_080),
+            framing: .desktopAroundWindow(horizontalMargin: 0, verticalMargin: 0)
+        )) { error in
+            XCTAssertEqual(error as? StageCaptureGeometryError, .windowSpansMultipleDisplays)
         }
     }
 

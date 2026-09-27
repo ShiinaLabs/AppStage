@@ -49,8 +49,18 @@ public struct StageCaptureDisplay: @unchecked Sendable {
     }
 }
 
-public enum StageCaptureDiscoveryError: Error, Equatable {
+public enum StageCaptureDiscoveryError: Error, Equatable, LocalizedError {
     case windowNotFound(bundleIdentifier: String)
+    case applicationNotFound(processIdentifier: pid_t, bundleIdentifier: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case let .windowNotFound(bundleIdentifier):
+            "No visible capture window was found for \(bundleIdentifier)."
+        case let .applicationNotFound(processIdentifier, bundleIdentifier):
+            "No running application matched PID \(processIdentifier) and bundle ID \(bundleIdentifier)."
+        }
+    }
 }
 
 /// Discovers shareable windows and displays through ScreenCaptureKit.
@@ -147,18 +157,39 @@ public enum StageCaptureDiscovery {
             throw StageCaptureDiscoveryError.windowNotFound(bundleIdentifier: window.bundleIdentifier)
         }
 
-        let excludedIDs: Set<CGWindowID>
         if includingApplicationWindows {
-            excludedIDs = Set(content.windows.compactMap { candidate -> CGWindowID? in
-                guard candidate.windowID != window.windowID,
-                      candidate.owningApplication?.processID != window.processIdentifier else { return nil }
-                return candidate.windowID
-            })
-        } else {
-            excludedIDs = Set(windowIDsToExclude(from: content.windows.map(\.windowID), except: window.windowID))
+            guard let application = content.applications.first(where: {
+                applicationMatches(
+                    processIdentifier: $0.processID,
+                    bundleIdentifier: $0.bundleIdentifier,
+                    expectedProcessIdentifier: window.processIdentifier,
+                    expectedBundleIdentifier: window.bundleIdentifier
+                )
+            }) else {
+                throw StageCaptureDiscoveryError.applicationNotFound(
+                    processIdentifier: window.processIdentifier,
+                    bundleIdentifier: window.bundleIdentifier
+                )
+            }
+            return SCContentFilter(
+                display: display.screenCaptureDisplay,
+                including: [application],
+                exceptingWindows: []
+            )
         }
+
+        let excludedIDs = Set(windowIDsToExclude(from: content.windows.map(\.windowID), except: window.windowID))
         let excludedWindows = content.windows.filter { excludedIDs.contains($0.windowID) }
         return SCContentFilter(display: display.screenCaptureDisplay, excludingWindows: excludedWindows)
+    }
+
+    static func applicationMatches(
+        processIdentifier: pid_t,
+        bundleIdentifier: String,
+        expectedProcessIdentifier: pid_t,
+        expectedBundleIdentifier: String
+    ) -> Bool {
+        processIdentifier == expectedProcessIdentifier && bundleIdentifier == expectedBundleIdentifier
     }
 
     static func windowIDsToExclude(from windowIDs: [CGWindowID], except targetWindowID: CGWindowID) -> [CGWindowID] {
