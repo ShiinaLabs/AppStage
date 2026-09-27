@@ -17,7 +17,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.7.0"),
         .package(url: "https://github.com/pointfreeco/swift-clocks", from: "1.1.1"),
-        .package(url: "https://github.com/lnquy/axe.git", revision: "9d6faa2724ce95b5acc24685de692dc832b990b4"),
+        .package(url: "https://github.com/lnquy/axe.git", exact: "0.1.0"),
     ],
     targets: [
         .target(
