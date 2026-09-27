@@ -101,6 +101,59 @@ import Testing
         #expect(runner.state == .cancelled)
     }
 
+    @Test func cancelledScenarioCanStartAgainFromItsFirstStep() async throws {
+        var events: [String] = []
+        var conditionChecks = 0
+        let actions = StageActionRegistry()
+        try actions.register(StageActionID("step")) { _ in events.append("step") }
+        try actions.register(StageActionID("complete")) { _ in events.append("complete") }
+        let conditions = StageConditionRegistry()
+        try conditions.register(StageConditionID("continue")) {
+            conditionChecks += 1
+            return conditionChecks > 1
+        }
+        let runner = makeRunner(
+            steps: [
+                .perform(StageAction(id: StageActionID("step"))),
+                .waitUntil(StageConditionID("continue"), timeout: .seconds(2)),
+                .perform(StageAction(id: StageActionID("complete"))),
+                .finish,
+            ],
+            actions: actions,
+            conditions: conditions
+        )
+
+        let firstRun = runner.start()
+        for _ in 0..<100 where conditionChecks == 0 { await Task.yield() }
+        #expect(conditionChecks > 0)
+        runner.cancel()
+        do {
+            try await firstRun.value
+            Issue.record("Expected the first run to be cancelled")
+        } catch is CancellationError {}
+
+        try await runner.start().value
+
+        #expect(events == ["step", "step", "complete"])
+        #expect(runner.state == .finished)
+    }
+
+    @Test func finishedScenarioCanStartAgainFromItsFirstStep() async throws {
+        var actionCount = 0
+        let actions = StageActionRegistry()
+        try actions.register(StageActionID("step")) { _ in actionCount += 1 }
+        let runner = makeRunner(
+            steps: [.perform(StageAction(id: StageActionID("step"))), .finish],
+            actions: actions
+        )
+
+        try await runner.start().value
+        try await runner.start().value
+
+        #expect(actionCount == 2)
+        #expect(runner.state == .finished)
+    }
+
     private func makeRunner(
         steps: [StageScenarioStep],
         actions: StageActionRegistry = StageActionRegistry(),

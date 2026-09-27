@@ -192,9 +192,10 @@ public final class StageScenarioRunner {
 
     @discardableResult
     public func start() -> Task<Void, Error> {
-        if let runTask { return runTask }
+        if state == .running, let runTask { return runTask }
         state = .running
         let task = Task { [self] in
+            defer { runTask = nil }
             do {
                 for step in script.steps {
                     try Task.checkCancellation()

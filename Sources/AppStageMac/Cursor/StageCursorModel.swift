@@ -9,6 +9,7 @@ public final class StageCursorModel: StageCursorDriving {
     public private(set) var isVisible = false
     public private(set) var isClicking = false
     private var targetPoints: [StageTargetID: StagePoint] = [:]
+    private var isPositionInitialized = false
 
     public init() {}
 
@@ -18,11 +19,24 @@ public final class StageCursorModel: StageCursorDriving {
         targetPoints = points
     }
 
+    public func reset() {
+        position = StagePoint(x: 0, y: 0)
+        isVisible = false
+        isClicking = false
+        isPositionInitialized = false
+    }
+
     func updateTargets(_ points: [StageTargetID: StagePoint]) {
         targetPoints = points
     }
 
     public func move(to point: StagePoint, duration: Duration) async throws {
+        guard isPositionInitialized else {
+            position = point
+            isPositionInitialized = true
+            isVisible = true
+            return
+        }
         isVisible = true
         let origin = position
         guard duration > .zero else {
