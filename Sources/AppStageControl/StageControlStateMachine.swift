@@ -25,6 +25,8 @@ public struct StageControlStateMachine: Sendable {
             allowed = [.scenarioLoaded, .ready, .playing, .paused, .finished].contains(state)
         case .performAction:
             allowed = [.ready, .playing, .paused].contains(state)
+        case .listScenarios:
+            allowed = [.connected, .scenarioLoaded, .ready, .finished].contains(state)
         case .queryState:
             allowed = state != .disconnected && state != .failed
         case .seek:
@@ -46,6 +48,8 @@ public struct StageControlStateMachine: Sendable {
             state = .scenarioLoaded
         case .reset:
             state = .scenarioLoaded
+        case .listScenarios:
+            break
         default:
             break
         }

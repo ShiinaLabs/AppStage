@@ -10,6 +10,7 @@ public struct StageLaunchConfiguration: Sendable {
     public let controlPort: UInt16?
     public let controlToken: String?
     public let controlSession: UUID?
+    public let discoverScenarios: Bool
 
     /// Parses AppStage options from process arguments. The executable name and
     /// arguments owned by the host app are ignored.
@@ -21,6 +22,7 @@ public struct StageLaunchConfiguration: Sendable {
         var controlPort: UInt16?
         var controlToken: String?
         var controlSession: UUID?
+        var discoverScenarios = false
         var seenOptions = Set<String>()
 
         var index = 0
@@ -39,6 +41,11 @@ public struct StageLaunchConfiguration: Sendable {
             case "--appstage-autoplay":
                 try Self.markSeen(option, in: &seenOptions)
                 autoplay = true
+                index += 1
+
+            case "--appstage-discover-scenarios":
+                try Self.markSeen(option, in: &seenOptions)
+                discoverScenarios = true
                 index += 1
 
             case "--appstage-window":
@@ -96,6 +103,7 @@ public struct StageLaunchConfiguration: Sendable {
         self.controlPort = controlPort
         self.controlToken = controlToken
         self.controlSession = controlSession
+        self.discoverScenarios = discoverScenarios
     }
 
     private static func markSeen(_ option: String, in seenOptions: inout Set<String>) throws {

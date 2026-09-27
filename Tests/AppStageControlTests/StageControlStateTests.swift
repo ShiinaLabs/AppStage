@@ -33,4 +33,12 @@ final class StageControlStateTests: XCTestCase {
         XCTAssertEqual(machine.state, .failed)
         XCTAssertThrowsError(try machine.begin(.queryState))
     }
+
+    func testScenarioDiscoveryDoesNotChangeControlState() throws {
+        var machine = StageControlStateMachine()
+        machine.connected()
+        try machine.begin(.listScenarios)
+        machine.succeeded(.listScenarios)
+        XCTAssertEqual(machine.state, .connected)
+    }
 }

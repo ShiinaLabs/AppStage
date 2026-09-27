@@ -10,8 +10,100 @@ struct AppStageCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "appstage",
         abstract: "Launch, inspect, and capture macOS app scenarios.",
-        subcommands: [ListCommand.self, SnapshotCommand.self, RecordCommand.self]
+        subcommands: [ListCommand.self, ScenariosCommand.self, SnapshotCommand.self, RecordCommand.self]
     )
+}
+
+struct ScenariosCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "scenarios",
+        abstract: "Launch a controlled app session and list its available scenarios."
+    )
+
+    @Option(name: .long, help: "Path to the target .app bundle.")
+    var app: String
+
+    @Option(name: .long, help: "Target app bundle identifier. Defaults to the app's bundle identifier.")
+    var bundleID: String?
+
+    @Option(name: .long, help: "Timeout in seconds for host discovery (default: 30).")
+    var timeout: Int = 30
+
+    @Flag(name: .long, help: "Terminate an already running target app and launch a new controlled instance.")
+    var replaceExisting = false
+
+    func run() async throws {
+        guard (1...600).contains(timeout) else {
+            throw ValidationError("--timeout must be between 1 and 600 seconds.")
+        }
+        let applicationURL = URL(fileURLWithPath: app).standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: applicationURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue,
+              let applicationBundleID = Bundle(url: applicationURL)?.bundleIdentifier,
+              !applicationBundleID.isEmpty
+        else {
+            throw ValidationError("--app must point to an app bundle with a bundle identifier.")
+        }
+        if let bundleID, bundleID != applicationBundleID {
+            throw ValidationError("--bundle-id must match the app bundle identifier (\(applicationBundleID)).")
+        }
+
+        try await discoverScenarios(
+            appURL: applicationURL,
+            bundleIdentifier: applicationBundleID,
+            timeout: .seconds(timeout),
+            policy: replaceExisting ? .replace : .reject
+        )
+    }
+}
+
+@MainActor
+private func discoverScenarios(
+    appURL: URL,
+    bundleIdentifier: String,
+    timeout: Duration,
+    policy: StageExistingApplicationPolicy
+) async throws {
+    let token = try StageControlToken.generate()
+    let sessionID = UUID()
+    let controller = StageControlController(token: token, sessionID: sessionID, bundleIdentifier: bundleIdentifier)
+    var appSession: StageAppSession?
+    do {
+        let port = try await controller.start()
+        let opened = try await StageAppSession.open(
+            appURL: appURL,
+            bundleIdentifier: bundleIdentifier,
+            arguments: [
+                "--appstage-discover-scenarios",
+                "--appstage-control-host", "127.0.0.1",
+                "--appstage-control-port", String(port),
+                "--appstage-control-token", token,
+                "--appstage-control-session", sessionID.uuidString,
+            ],
+            existingApplicationPolicy: policy
+        )
+        appSession = opened
+        await controller.bindExpectedPID(opened.processIdentifier)
+        try await controller.waitForHandshake(timeout: timeout)
+        let result = try await controller.request(.listScenarios, timeout: timeout)
+        let scenarios = result.scenarios ?? []
+        if scenarios.isEmpty {
+            print("No scenarios are available.")
+        } else {
+            for scenario in scenarios {
+                let name = scenario.displayName.map { "\t\($0)" } ?? ""
+                let duration = scenario.durationMilliseconds.map { "\t\($0) ms" } ?? ""
+                print("\(scenario.id.rawValue)\(name)\(duration)")
+            }
+        }
+        await controller.close()
+        await opened.finish()
+    } catch {
+        await controller.close()
+        await appSession?.finish()
+        throw error
+    }
 }
 
 struct ListCommand: AsyncParsableCommand {

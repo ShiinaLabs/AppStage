@@ -85,13 +85,15 @@ public actor StageControlClient {
             case .pause: try await host.pauseScenario()
             case .reset: try await host.resetScenario()
             case let .performAction(action): try await host.performAction(action)
+            case .listScenarios: break
             case .queryState: break
             case .seek: throw StageControlError.unsupported("seek reconstruction")
             }
             guard !closed && !Task.isCancelled else { return }
             if machine.state == .failed { return }
             machine.succeeded(request.command)
-            let snapshot = StageControlSnapshot(state: machine.state, scenarioID: machine.scenarioID)
+            let scenarios = request.command == .listScenarios ? await host.availableScenarios() : nil
+            let snapshot = StageControlSnapshot(state: machine.state, scenarioID: machine.scenarioID, scenarios: scenarios)
             try await socket.send(.response(.init(requestID: request.id, result: .success(snapshot))))
             guard !closed && !Task.isCancelled && machine.state != .finished && machine.state != .failed else { return }
             switch request.command {

@@ -7,9 +7,10 @@ particular product.
 
 ## Package targets
 
-- AppStage: scenario identifiers, deterministic sequences, launch arguments,
-  and clock-driven playback.
-- AppStageMac: host-app window size and positioning.
+- AppStage: scenario identifiers, deterministic sequences, cue playback, and
+  linear scenario scripts with async conditions and semantic cursor targets.
+- AppStageMac: host-app window sizing plus an opt-in demo cursor overlay for
+  controlled scenarios.
 - AppStageCapture: ScreenCaptureKit discovery, screenshots, and MOV recording.
 - AppStageCLI: the appstage command-line tool.
 
@@ -19,6 +20,12 @@ List running applications visible to ScreenCaptureKit:
 
 ~~~sh
 appstage list
+~~~
+
+Launch a controlled app instance and discover its scenario IDs:
+
+~~~sh
+appstage scenarios --app "/Applications/Example.app"
 ~~~
 
 Capture a PNG around an already-running app window:

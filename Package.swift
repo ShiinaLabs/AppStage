@@ -23,7 +23,7 @@ let package = Package(
             name: "AppStage",
             dependencies: [.product(name: "Clocks", package: "swift-clocks")]
         ),
-        .target(name: "AppStageMac"),
+        .target(name: "AppStageMac", dependencies: ["AppStage"]),
         .target(name: "AppStageCapture"),
         .target(name: "AppStageControl", dependencies: ["AppStage"]),
         .executableTarget(
