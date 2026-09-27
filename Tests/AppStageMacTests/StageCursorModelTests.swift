@@ -24,4 +24,49 @@ final class StageCursorModelTests: XCTestCase {
         XCTAssertEqual(model.position, secondTarget)
         XCTAssertTrue(model.isVisible)
     }
+
+    func testPlaceShowHideAndResetUpdatePresentationState() async throws {
+        let model = StageCursorModel()
+        let target = StagePoint(x: 260, y: 140)
+
+        try await model.place(at: target)
+        XCTAssertEqual(model.position, target)
+        XCTAssertFalse(model.isVisible)
+
+        try await model.show(duration: .zero)
+        XCTAssertTrue(model.isVisible)
+        XCTAssertEqual(model.opacity, 1)
+
+        try await model.hide(duration: .zero)
+        XCTAssertFalse(model.isVisible)
+        XCTAssertEqual(model.opacity, 0)
+
+        try await model.mouseDown()
+        model.reset()
+        XCTAssertFalse(model.isVisible)
+        XCTAssertFalse(model.isMouseDown)
+        XCTAssertEqual(model.opacity, 0)
+    }
+
+    func testMouseDownUpAndClickExposePressAndReleaseState() async throws {
+        let model = StageCursorModel()
+
+        try await model.mouseDown()
+        XCTAssertTrue(model.isMouseDown)
+        try await model.mouseUp()
+        XCTAssertFalse(model.isMouseDown)
+        XCTAssertEqual(model.clickFeedbackID, 1)
+
+        try await model.click()
+        XCTAssertFalse(model.isMouseDown)
+        XCTAssertEqual(model.clickFeedbackID, 2)
+    }
+
+    func testTypingStepBuildsVisibleTextOneCharacterAtATime() async throws {
+        let model = StageCursorModel()
+
+        try await model.typeText("Studio Mesh", characterInterval: .milliseconds(1))
+
+        XCTAssertEqual(model.typedText, "Studio Mesh")
+    }
 }

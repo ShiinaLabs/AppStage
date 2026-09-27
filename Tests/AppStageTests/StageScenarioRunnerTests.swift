@@ -154,12 +154,146 @@ import Testing
         #expect(runner.state == .finished)
     }
 
+    @Test func interactionRunsMovementHoverClickActionAndConditionInOrder() async throws {
+        let target = StageTargetID("target")
+        let targets = StageTargetRegistry()
+        try targets.register(target) { StagePoint(x: 100, y: 80) }
+        let cursor = TestCursor()
+        let actions = StageActionRegistry()
+        try actions.register(StageActionID("select")) { _ in cursor.record("action") }
+        let conditions = StageConditionRegistry()
+        try conditions.register(StageConditionID("selected")) {
+            cursor.record("condition")
+            return true
+        }
+        let runner = makeRunner(
+            steps: [
+                .interact(
+                    target: target,
+                    action: StageAction(id: StageActionID("select")),
+                    condition: StageConditionID("selected"),
+                    movementDuration: .zero,
+                    hoverDuration: .milliseconds(1)
+                ),
+                .finish,
+            ],
+            actions: actions,
+            conditions: conditions,
+            targets: targets,
+            cursor: cursor
+        )
+
+        try await runner.start().value
+
+        #expect(cursor.events == ["move", "hover", "click", "action", "condition"])
+    }
+
+    @Test func interactionActionFailurePreventsItsConditionAndLaterSteps() async throws {
+        enum Expected: Error { case stop }
+        let target = StageTargetID("target")
+        let targets = StageTargetRegistry()
+        try targets.register(target) { StagePoint(x: 20, y: 30) }
+        let cursor = TestCursor()
+        var conditionRan = false
+        var laterStepRan = false
+        let actions = StageActionRegistry()
+        try actions.register(StageActionID("fail")) { _ in throw Expected.stop }
+        try actions.register(StageActionID("later")) { _ in laterStepRan = true }
+        let conditions = StageConditionRegistry()
+        try conditions.register(StageConditionID("never")) {
+            conditionRan = true
+            return true
+        }
+        let runner = makeRunner(
+            steps: [
+                .interact(
+                    target: target,
+                    action: StageAction(id: StageActionID("fail")),
+                    condition: StageConditionID("never"),
+                    movementDuration: .zero
+                ),
+                .perform(StageAction(id: StageActionID("later"))),
+            ],
+            actions: actions,
+            conditions: conditions,
+            targets: targets,
+            cursor: cursor
+        )
+
+        do {
+            try await runner.start().value
+            Issue.record("Expected the interaction action to fail")
+        } catch is Expected {}
+
+        #expect(!conditionRan)
+        #expect(!laterStepRan)
+        #expect(runner.state == .failed)
+    }
+
+    @Test func scrollPresentationPrecedesItsSemanticAction() async throws {
+        let target = StageTargetID("scroll-area")
+        let targets = StageTargetRegistry()
+        try targets.register(target) { StagePoint(x: 50, y: 60) }
+        let cursor = TestCursor()
+        let actions = StageActionRegistry()
+        try actions.register(StageActionID("scroll-content")) { _ in cursor.record("action") }
+        let runner = makeRunner(
+            steps: [
+                .scroll(
+                    at: target,
+                    direction: .down,
+                    amount: StageScrollAmount(distance: 2),
+                    movementDuration: .zero,
+                    hoverDuration: .zero,
+                    scrollDuration: .milliseconds(1),
+                    action: StageAction(id: StageActionID("scroll-content"))
+                ),
+                .finish,
+            ],
+            actions: actions,
+            targets: targets,
+            cursor: cursor
+        )
+
+        try await runner.start().value
+
+        #expect(cursor.events == ["move", "scroll-down-2", "action"])
+    }
+
+    @Test func cancellingHoverPreventsTheFollowingStep() async throws {
+        var laterStepRan = false
+        let target = StageTargetID("target")
+        let targets = StageTargetRegistry()
+        try targets.register(target) { StagePoint(x: 20, y: 30) }
+        let actions = StageActionRegistry()
+        try actions.register(StageActionID("later")) { _ in laterStepRan = true }
+        let runner = makeRunner(
+            steps: [
+                .hover(at: target, duration: .seconds(10), movementDuration: .zero),
+                .perform(StageAction(id: StageActionID("later"))),
+            ],
+            actions: actions,
+            targets: targets
+        )
+        let task = runner.start()
+        try await Task.sleep(for: .milliseconds(20))
+        runner.cancel()
+
+        do {
+            try await task.value
+            Issue.record("Expected hover cancellation")
+        } catch is CancellationError {}
+
+        #expect(!laterStepRan)
+        #expect(runner.state == .cancelled)
+    }
+
     private func makeRunner(
         steps: [StageScenarioStep],
         actions: StageActionRegistry = StageActionRegistry(),
         conditions: StageConditionRegistry = StageConditionRegistry(),
         targets: StageTargetRegistry = StageTargetRegistry(),
-        cursor: TestCursor = TestCursor()
+        cursor: any StageCursorDriving = TestCursor()
     ) -> StageScenarioRunner {
         StageScenarioRunner(
             script: StageScenarioScript(id: StageScenarioID("test"), steps: steps),
@@ -170,10 +304,34 @@ import Testing
         )
     }
 
-    @MainActor private final class TestCursor: StageCursorDriving {
+    @MainActor private final class TestCursor: StageCursorInteractionDriving {
         private(set) var positions: [StagePoint] = []
         private(set) var clickCount = 0
-        func move(to point: StagePoint, duration: Duration) async throws { positions.append(point) }
-        func click() async throws { clickCount += 1 }
+        private(set) var events: [String] = []
+
+        func record(_ event: String) { events.append(event) }
+
+        func place(at point: StagePoint) async throws { events.append("place") }
+        func show(duration: Duration) async throws { events.append("show") }
+        func hide(duration: Duration) async throws { events.append("hide") }
+        func hover(for duration: Duration) async throws {
+            events.append("hover")
+            if duration > .zero { try await Task.sleep(for: duration) }
+        }
+        func mouseDown() async throws { events.append("down") }
+        func mouseUp() async throws { events.append("up") }
+        func move(to point: StagePoint, duration: Duration) async throws {
+            positions.append(point)
+            events.append("move")
+        }
+        func click() async throws {
+            clickCount += 1
+            events.append("click")
+        }
+        func doubleClick(interval: Duration) async throws { events.append("double-click") }
+        func scroll(direction: StageScrollDirection, amount: StageScrollAmount, duration: Duration) async throws {
+            events.append("scroll-\(direction == .up ? "up" : "down")-\(Int(amount.distance))")
+        }
+        func typeText(_ text: String, characterInterval: Duration) async throws { events.append("type-\(text)") }
     }
 }

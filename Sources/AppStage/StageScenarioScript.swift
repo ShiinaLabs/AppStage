@@ -27,6 +27,21 @@ public struct StagePoint: Sendable, Equatable {
     }
 }
 
+public enum StageScrollDirection: Sendable, Equatable {
+    case up
+    case down
+}
+
+/// An abstract, product-neutral amount for a visual scroll gesture.
+/// The host action decides how that gesture changes its UI.
+public struct StageScrollAmount: Sendable, Equatable {
+    public let distance: Double
+
+    public init(distance: Double) {
+        self.distance = distance
+    }
+}
+
 /// A single ordered operation in a host-driven scenario.
 public enum StageScenarioStep: Sendable {
     case perform(StageAction)
@@ -34,6 +49,39 @@ public enum StageScenarioStep: Sendable {
     case waitUntil(StageConditionID, timeout: Duration)
     case moveCursor(to: StageTargetID, duration: Duration)
     case click(StageTargetID)
+    case placeCursor(near: StageTargetID, offset: StagePoint)
+    case showCursor(duration: Duration = .milliseconds(180))
+    case hideCursor(duration: Duration = .milliseconds(180))
+    case hover(
+        at: StageTargetID,
+        duration: Duration,
+        movementDuration: Duration = .milliseconds(420)
+    )
+    case mouseDown
+    case mouseUp
+    case doubleClick(
+        at: StageTargetID,
+        movementDuration: Duration = .milliseconds(420),
+        clickInterval: Duration = .milliseconds(150)
+    )
+    case interact(
+        target: StageTargetID,
+        action: StageAction? = nil,
+        condition: StageConditionID? = nil,
+        movementDuration: Duration = .milliseconds(420),
+        hoverDuration: Duration = .zero,
+        conditionTimeout: Duration = .seconds(10)
+    )
+    case scroll(
+        at: StageTargetID,
+        direction: StageScrollDirection,
+        amount: StageScrollAmount,
+        movementDuration: Duration = .milliseconds(420),
+        hoverDuration: Duration = .milliseconds(250),
+        scrollDuration: Duration = .milliseconds(600),
+        action: StageAction? = nil
+    )
+    case typeText(String, characterInterval: Duration = .milliseconds(65))
     case finish
 }
 
@@ -160,6 +208,29 @@ public protocol StageCursorDriving: AnyObject {
     func click() async throws
 }
 
+/// Visual-only cursor operations. Hosts that only implement the original
+/// movement and click protocol remain source-compatible with existing scripts.
+@MainActor
+public protocol StageCursorInteractionDriving: StageCursorDriving {
+    func place(at point: StagePoint) async throws
+    func show(duration: Duration) async throws
+    func hide(duration: Duration) async throws
+    func hover(for duration: Duration) async throws
+    func mouseDown() async throws
+    func mouseUp() async throws
+    func doubleClick(interval: Duration) async throws
+    func scroll(direction: StageScrollDirection, amount: StageScrollAmount, duration: Duration) async throws
+    func typeText(_ text: String, characterInterval: Duration) async throws
+}
+
+public enum StageScenarioRunnerError: Error, Equatable, Sendable, LocalizedError {
+    case cursorInteractionUnavailable
+
+    public var errorDescription: String? {
+        "The host cursor does not support this interaction."
+    }
+}
+
 public enum StageScenarioRunnerState: Equatable, Sendable {
     case idle, running, finished, failed, cancelled
 }
@@ -213,6 +284,40 @@ public final class StageScenarioRunner {
                         let point = try await targets.resolve(target)
                         try await cursor.move(to: point, duration: .zero)
                         try await cursor.click()
+                    case let .placeCursor(target, offset):
+                        let point = try await targets.resolve(target)
+                        try await interactions.place(at: StagePoint(x: point.x + offset.x, y: point.y + offset.y))
+                    case let .showCursor(duration):
+                        try await interactions.show(duration: duration)
+                    case let .hideCursor(duration):
+                        try await interactions.hide(duration: duration)
+                    case let .hover(target, duration, movementDuration):
+                        let point = try await targets.resolve(target)
+                        try await cursor.move(to: point, duration: movementDuration)
+                        try await interactions.hover(for: duration)
+                    case .mouseDown:
+                        try await interactions.mouseDown()
+                    case .mouseUp:
+                        try await interactions.mouseUp()
+                    case let .doubleClick(target, movementDuration, clickInterval):
+                        let point = try await targets.resolve(target)
+                        try await cursor.move(to: point, duration: movementDuration)
+                        try await interactions.doubleClick(interval: clickInterval)
+                    case let .interact(target, action, condition, movementDuration, hoverDuration, conditionTimeout):
+                        let point = try await targets.resolve(target)
+                        try await cursor.move(to: point, duration: movementDuration)
+                        if hoverDuration > .zero { try await interactions.hover(for: hoverDuration) }
+                        try await cursor.click()
+                        if let action { try await actions.execute(action) }
+                        if let condition { try await conditions.waitUntil(condition, timeout: conditionTimeout) }
+                    case let .scroll(target, direction, amount, movementDuration, hoverDuration, scrollDuration, action):
+                        let point = try await targets.resolve(target)
+                        try await cursor.move(to: point, duration: movementDuration)
+                        if hoverDuration > .zero { try await interactions.hover(for: hoverDuration) }
+                        try await interactions.scroll(direction: direction, amount: amount, duration: scrollDuration)
+                        if let action { try await actions.execute(action) }
+                    case let .typeText(text, characterInterval):
+                        try await interactions.typeText(text, characterInterval: characterInterval)
                     case .finish:
                         state = .finished
                         return
@@ -234,5 +339,14 @@ public final class StageScenarioRunner {
     public func cancel() {
         guard state == .running else { return }
         runTask?.cancel()
+    }
+
+    private var interactions: any StageCursorInteractionDriving {
+        get throws {
+            guard let cursor = cursor as? any StageCursorInteractionDriving else {
+                throw StageScenarioRunnerError.cursorInteractionUnavailable
+            }
+            return cursor
+        }
     }
 }
