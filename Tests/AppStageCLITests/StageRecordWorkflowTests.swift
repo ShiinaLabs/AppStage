@@ -25,38 +25,36 @@ final class StageRecordWorkflowTests: XCTestCase {
                 log.append("launch")
                 return session
             },
-            makeRecorder: { _, _ in recorder }
+            makeRecorder: { _, _, _ in recorder }
         )
         try await workflow.run(
             scenarioID: StageScenarioID("example"), bundleIdentifier: "com.example.fixture",
             token: "secret", sessionID: UUID(), timeout: .seconds(30),
-            existingApplicationPolicy: .reject
+            existingApplicationPolicy: .reject,
+            outputURL: URL(fileURLWithPath: "/tmp/example.mov")
         )
-        XCTAssertEqual(log.values, [
-            "listenerReady", "launch", "handshake", "load", "prepare", "ready",
-            "recorderStart", "play", "finished", "recorderStop", "controllerClose", "appCleanup",
-        ])
+        XCTAssertEqual(Array(log.values.prefix(4)), ["listenerReady", "launch", "handshake", "load:example"])
+        XCTAssertTrue(log.values.contains("failureWaitCancelled"))
+        XCTAssertEqual(log.values.suffix(3), ["recorderStop", "controllerClose", "appCleanup"])
     }
 
     func testScenarioFailureStillFinalizesAndCleansUp() async throws {
         let log = Log()
-        let controller = FakeController(log: log, failOnFinished: true)
-        let session = FakeSession(log: log)
-        let recorder = FakeRecorder(log: log)
         let workflow = StageRecordWorkflow(
-            controller: controller,
-            openSession: { _, _ in log.append("launch"); return session },
-            makeRecorder: { _, _ in recorder }
+            controller: FakeController(log: log, failOnFinished: true),
+            openSession: { _, _ in log.append("launch"); return FakeSession(log: log) },
+            makeRecorder: { _, _, _ in FakeRecorder(log: log) }
         )
         do {
             try await workflow.run(
                 scenarioID: StageScenarioID("example"), bundleIdentifier: "com.example.fixture",
                 token: "secret", sessionID: UUID(), timeout: .seconds(30),
-                existingApplicationPolicy: .reject
+                existingApplicationPolicy: .reject,
+                outputURL: URL(fileURLWithPath: "/tmp/example.mov")
             )
             XCTFail("Expected scenario failure")
         } catch StageControlError.remoteFailure {
-            XCTAssertEqual(log.values.suffix(4), ["recorderStop", "discardOutput", "controllerClose", "appCleanup"])
+            XCTAssertTrue(log.values.suffix(4).elementsEqual(["recorderStop", "discardOutput", "controllerClose", "appCleanup"]))
         }
     }
 
@@ -65,13 +63,14 @@ final class StageRecordWorkflowTests: XCTestCase {
         let workflow = StageRecordWorkflow(
             controller: FakeController(log: log),
             openSession: { _, _ in throw StageAppSessionError.targetAlreadyRunning },
-            makeRecorder: { _, _ in XCTFail("Must not create recorder"); return FakeRecorder(log: log) }
+            makeRecorder: { _, _, _ in XCTFail("Must not create recorder"); return FakeRecorder(log: log) }
         )
         do {
             try await workflow.run(
                 scenarioID: StageScenarioID("example"), bundleIdentifier: "com.example.fixture",
                 token: "secret", sessionID: UUID(), timeout: .seconds(30),
-                existingApplicationPolicy: .reject
+                existingApplicationPolicy: .reject,
+                outputURL: URL(fileURLWithPath: "/tmp/example.mov")
             )
             XCTFail("Expected rejection")
         } catch StageAppSessionError.targetAlreadyRunning {
@@ -84,13 +83,14 @@ final class StageRecordWorkflowTests: XCTestCase {
         let workflow = StageRecordWorkflow(
             controller: FakeController(log: log),
             openSession: { _, _ in log.append("launch"); return FakeSession(log: log) },
-            makeRecorder: { _, _ in FakeRecorder(log: log, cancelOnStop: true) }
+            makeRecorder: { _, _, _ in FakeRecorder(log: log, cancelOnStop: true) }
         )
         do {
             try await workflow.run(
                 scenarioID: StageScenarioID("example"), bundleIdentifier: "com.example.fixture",
                 token: "secret", sessionID: UUID(), timeout: .seconds(30),
-                existingApplicationPolicy: .reject
+                existingApplicationPolicy: .reject,
+                outputURL: URL(fileURLWithPath: "/tmp/example.mov")
             )
             XCTFail("Expected cancellation")
         } catch is CancellationError {
@@ -98,28 +98,44 @@ final class StageRecordWorkflowTests: XCTestCase {
         }
     }
 
-    func testRecorderStartFailureStillClosesControlAndOwnedApplication() async throws {
+    func testRecorderRuntimeFailureWinsRaceAndDiscardsOutput() async throws {
         let log = Log()
         let workflow = StageRecordWorkflow(
-            controller: FakeController(log: log),
-            openSession: { _, policy in
-                XCTAssertEqual(policy, .replace)
-                log.append("launch")
-                return FakeSession(log: log)
-            },
-            makeRecorder: { _, _ in FakeRecorder(log: log, failOnStart: true) }
+            controller: FakeController(log: log, blockFinishedUntilCancelled: true),
+            openSession: { _, _ in log.append("launch"); return FakeSession(log: log) },
+            makeRecorder: { _, _, _ in FakeRecorder(log: log, failDuringRecording: true) }
         )
         do {
             try await workflow.run(
                 scenarioID: StageScenarioID("example"), bundleIdentifier: "com.example.fixture",
                 token: "secret", sessionID: UUID(), timeout: .seconds(30),
-                existingApplicationPolicy: .replace
+                existingApplicationPolicy: .reject,
+                outputURL: URL(fileURLWithPath: "/tmp/example.mov")
             )
-            XCTFail("Expected recorder failure")
-        } catch FixtureFailure.start {
-            XCTAssertEqual(log.values.suffix(3), ["recorderStart", "controllerClose", "appCleanup"])
-            XCTAssertFalse(log.values.contains("play"))
+            XCTFail("Expected runtime recorder failure")
+        } catch FixtureFailure.runtime {
+            XCTAssertTrue(log.values.contains("finishedCancelled"))
+            XCTAssertEqual(log.values.suffix(4), ["recorderStop", "discardOutput", "controllerClose", "appCleanup"])
+            XCTAssertTrue(log.values.contains("discardOutput"))
         }
+    }
+
+    func testScenarioFinishWinsRaceAndCancelsFailureWaiter() async throws {
+        let log = Log()
+        let workflow = StageRecordWorkflow(
+            controller: FakeController(log: log),
+            openSession: { _, _ in log.append("launch"); return FakeSession(log: log) },
+            makeRecorder: { _, _, _ in FakeRecorder(log: log) }
+        )
+        try await workflow.run(
+            scenarioID: StageScenarioID("example"), bundleIdentifier: "com.example.fixture",
+            token: "secret", sessionID: UUID(), timeout: .seconds(30),
+            existingApplicationPolicy: .reject,
+            outputURL: URL(fileURLWithPath: "/tmp/example.mov")
+        )
+        XCTAssertTrue(log.values.contains("finished"))
+        XCTAssertTrue(log.values.contains("failureWaitCancelled"))
+        XCTAssertEqual(log.values.suffix(3), ["recorderStop", "controllerClose", "appCleanup"])
     }
 }
 
@@ -131,23 +147,33 @@ final class StageRecordWorkflowTests: XCTestCase {
 @MainActor private final class FakeController: StageRecordControlling {
     let log: Log
     let failOnFinished: Bool
-    init(log: Log, failOnFinished: Bool = false) { self.log = log; self.failOnFinished = failOnFinished }
+    let blockFinishedUntilCancelled: Bool
+    init(log: Log, failOnFinished: Bool = false, blockFinishedUntilCancelled: Bool = false) {
+        self.log = log
+        self.failOnFinished = failOnFinished
+        self.blockFinishedUntilCancelled = blockFinishedUntilCancelled
+    }
     func start() async throws -> UInt16 { log.append("listenerReady"); return 49152 }
     func bindExpectedPID(_ pid: Int32) async { XCTAssertEqual(pid, 123) }
     func waitForHandshake(timeout: Duration) async throws { log.append("handshake") }
-    func request(_ command: StageControlCommand, timeout: Duration) async throws {
+    func request(_ command: StageControlCommand, timeout: Duration) async throws -> StageControlSnapshot {
         switch command {
-        case .loadScenario: log.append("load")
+        case let .loadScenario(id): log.append("load:\(id.rawValue)")
         case .prepare: log.append("prepare")
         case .play: log.append("play")
         default: XCTFail("Unexpected command")
         }
+        return StageControlSnapshot(state: .connected)
     }
     func waitForEvent(_ kind: StageControlEventKind, timeout: Duration) async throws {
         switch kind {
         case .ready: log.append("ready")
         case .finished:
             log.append("finished")
+            if blockFinishedUntilCancelled {
+                do { try await Task.sleep(for: .seconds(3_600)) }
+                catch { log.append("finishedCancelled"); throw error }
+            }
             if failOnFinished { throw StageControlError.remoteFailure("fixture failure") }
         default: XCTFail("Unexpected event")
         }
@@ -167,10 +193,12 @@ final class StageRecordWorkflowTests: XCTestCase {
     let log: Log
     let cancelOnStop: Bool
     let failOnStart: Bool
-    init(log: Log, cancelOnStop: Bool = false, failOnStart: Bool = false) {
+    let failDuringRecording: Bool
+    init(log: Log, cancelOnStop: Bool = false, failOnStart: Bool = false, failDuringRecording: Bool = false) {
         self.log = log
         self.cancelOnStop = cancelOnStop
         self.failOnStart = failOnStart
+        self.failDuringRecording = failDuringRecording
     }
     func start() async throws {
         log.append("recorderStart")
@@ -180,7 +208,14 @@ final class StageRecordWorkflowTests: XCTestCase {
         log.append("recorderStop")
         if cancelOnStop { withUnsafeCurrentTask { $0?.cancel() } }
     }
+    func waitForFailure() async throws -> Never {
+        if failDuringRecording { log.append("failure"); throw FixtureFailure.runtime }
+        log.append("failureWait")
+        do { try await Task.sleep(for: .seconds(3_600)) }
+        catch { log.append("failureWaitCancelled"); throw error }
+        throw CancellationError()
+    }
     func discardOutputIfOwned() async { log.append("discardOutput") }
 }
 
-private enum FixtureFailure: Error { case start }
+private enum FixtureFailure: Error { case start, runtime }

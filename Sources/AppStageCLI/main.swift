@@ -10,7 +10,10 @@ struct AppStageCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "appstage",
         abstract: "Launch, inspect, and capture macOS app scenarios.",
-        subcommands: [ListCommand.self, ScenariosCommand.self, RunCommand.self, SnapshotCommand.self, RecordCommand.self]
+        subcommands: [
+            ListCommand.self, ScenariosCommand.self, RunCommand.self,
+            SnapshotCommand.self, RecordCommand.self, CaptureAllCommand.self,
+        ]
     )
 }
 
@@ -76,8 +79,8 @@ private func runScenario(
         session = opened
         await controller.bindExpectedPID(opened.processIdentifier)
         try await controller.waitForHandshake(timeout: timeout)
-        try await controller.request(.loadScenario(scenarioID), timeout: timeout)
-        try await controller.request(.prepare, timeout: timeout)
+        _ = try await controller.request(.loadScenario(scenarioID), timeout: timeout)
+        _ = try await controller.request(.prepare, timeout: timeout)
         _ = try await controller.waitForEvent(.ready, timeout: timeout)
         _ = try await controller.request(.play, timeout: timeout)
         _ = try await controller.waitForEvent(.finished, timeout: timeout)
@@ -370,7 +373,7 @@ struct RecordCommand: AsyncParsableCommand {
                         existingApplicationPolicy: policy
                     )
                 },
-                makeRecorder: { pid, bundleID in
+                makeRecorder: { pid, bundleID, outputURL in
                     let window = try await waitForWindow(
                         bundleIdentifier: bundleID,
                         processIdentifier: pid,
@@ -388,7 +391,8 @@ struct RecordCommand: AsyncParsableCommand {
             try await workflow.run(
                 scenarioID: StageScenarioID(scenario), bundleIdentifier: applicationBundleID,
                 token: token, sessionID: sessionID, timeout: .seconds(timeout),
-                existingApplicationPolicy: replaceExisting ? .replace : .reject
+                existingApplicationPolicy: replaceExisting ? .replace : .reject,
+                outputURL: outputURL
             )
         }
         let signalCancellation = StageRecordSignalCancellation(task: captureTask)
@@ -400,6 +404,153 @@ struct RecordCommand: AsyncParsableCommand {
         }
 
         print("Wrote MOV to \(outputURL.path)")
+    }
+}
+
+struct CaptureAllCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "capture-all",
+        abstract: "Record every scenario exposed by a controlled app into one output directory."
+    )
+
+    @Option(name: .long, help: "Path to the target .app bundle.")
+    var app: String
+
+    @Option(name: .long, help: "Target app bundle identifier. Defaults to the app's bundle identifier.")
+    var bundleID: String?
+
+    @Option(name: .customLong("output-dir"), help: "Directory for scenario MOVs and manifest.json.")
+    var outputDirectory: String
+
+    @Option(name: .long, help: "Background image used as the final video canvas.")
+    var backgroundImage: String?
+
+    @Option(name: .long, help: "Timeout in seconds for handshake, preparation, and each scenario (default: 30).")
+    var timeout: Int = 30
+
+    @Option(name: .long, help: "Horizontal desktop margin in points.")
+    var horizontalMargin: Double = 220
+
+    @Option(name: .long, help: "Vertical desktop margin in points.")
+    var verticalMargin: Double = 120
+
+    @Option(name: .long, help: "Output frame rate.")
+    var frameRate: Int = 60
+
+    @Flag(name: .long, help: "Keep an application launched by AppStage running after capture finishes. Pre-existing applications are never terminated.")
+    var keepAppRunning = false
+
+    @Flag(name: .long, help: "Terminate an already running target app and launch a new controlled instance.")
+    var replaceExisting = false
+
+    func run() async throws {
+        guard (1...600).contains(timeout) else {
+            throw ValidationError("--timeout must be between 1 and 600 seconds.")
+        }
+        guard horizontalMargin.isFinite, verticalMargin.isFinite,
+              horizontalMargin >= 0, verticalMargin >= 0
+        else {
+            throw ValidationError("Capture margins must be finite, non-negative numbers.")
+        }
+
+        let applicationURL = URL(fileURLWithPath: app).standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: applicationURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else {
+            throw ValidationError("--app must point to an existing .app bundle.")
+        }
+        guard let applicationBundleID = Bundle(url: applicationURL)?.bundleIdentifier,
+              !applicationBundleID.isEmpty else {
+            throw ValidationError("Could not read the app bundle identifier; provide --bundle-id.")
+        }
+        if let bundleID, bundleID != applicationBundleID {
+            throw ValidationError("--bundle-id must match the app bundle identifier (\(applicationBundleID)).")
+        }
+
+        let canvas: StageCanvasConfiguration?
+        if let backgroundImage {
+            let backgroundURL = URL(fileURLWithPath: backgroundImage).standardizedFileURL
+            do {
+                canvas = try StageCanvasConfiguration(backgroundImageURL: backgroundURL)
+            } catch let error as LocalizedError {
+                throw ValidationError(error.errorDescription ?? "Background image could not be decoded.")
+            }
+        } else {
+            canvas = nil
+        }
+        let captureConfiguration: StageCaptureConfiguration
+        do {
+            captureConfiguration = try StageCaptureConfiguration(
+                resolution: canvas?.resolution,
+                frameRate: frameRate,
+                cursor: .hidden,
+                framing: .desktopAroundWindow(
+                    horizontalMargin: CGFloat(horizontalMargin),
+                    verticalMargin: CGFloat(verticalMargin)
+                ),
+                includesApplicationWindows: true,
+                canvas: canvas
+            )
+        } catch {
+            throw ValidationError("Invalid capture configuration: \(error.localizedDescription)")
+        }
+
+        let captureTask = Task { @MainActor in
+            let token = try StageControlToken.generate()
+            let sessionID = UUID()
+            let recorderWorkflow = StageRecordWorkflow(
+                controller: StageSystemRecordController(
+                    underlying: StageControlController(
+                        token: token, sessionID: sessionID, bundleIdentifier: applicationBundleID,
+                        accessibilityHandler: { operation, pid in StageAccessibilityController.handle(operation, pid: pid) }
+                    )
+                ),
+                openSession: { arguments, policy in
+                    try await StageAppSession.open(
+                        appURL: applicationURL,
+                        bundleIdentifier: applicationBundleID,
+                        arguments: arguments,
+                        keepAppRunning: keepAppRunning,
+                        existingApplicationPolicy: policy
+                    )
+                },
+                makeRecorder: { pid, bundleID, outputURL in
+                    let window = try await waitForWindow(
+                        bundleIdentifier: bundleID,
+                        processIdentifier: pid,
+                        timeout: .seconds(timeout)
+                    )
+                    let targetDisplay = try await display(for: window)
+                    return StageSystemRecordRecorder(underlying: StageVideoRecorder(
+                        window: window,
+                        display: targetDisplay,
+                        configuration: captureConfiguration,
+                        outputURL: outputURL
+                    ))
+                }
+            )
+            let workflow = StageBatchRecordWorkflow(
+                recordWorkflow: recorderWorkflow,
+                outputDirectory: URL(fileURLWithPath: outputDirectory).standardizedFileURL,
+                bundleIdentifier: applicationBundleID,
+                captureConfiguration: captureConfiguration,
+                horizontalMargin: horizontalMargin,
+                verticalMargin: verticalMargin,
+                timeout: .seconds(timeout),
+                token: token,
+                sessionID: sessionID,
+                existingApplicationPolicy: replaceExisting ? .replace : .reject
+            )
+            try await workflow.run()
+        }
+        let signalCancellation = StageRecordSignalCancellation(task: captureTask)
+        defer { signalCancellation.cancel() }
+        do {
+            try await captureTask.value
+        } catch is CancellationError {
+            throw ValidationError("Batch capture cancelled.")
+        }
     }
 }
 

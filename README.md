@@ -46,6 +46,17 @@ appstage record \
   --output ./Artifacts/walkthrough.mov
 ~~~
 
+Record every scenario exposed by one controlled app session into a batch
+directory. The directory contains one MOV per scenario and an incremental
+`manifest.json` describing the capture and each output:
+
+~~~sh
+appstage capture-all \
+  --app "/Applications/Example.app" \
+  --output-dir ./Artifacts/batch \
+  --background-image ./Artifacts/background.png
+~~~
+
 The target app receives --appstage-scenario, --appstage-autoplay, and
 --appstage-window arguments. It can parse them with StageLaunchConfiguration.
 Recording uses a one-second startup warm-up before capture begins.

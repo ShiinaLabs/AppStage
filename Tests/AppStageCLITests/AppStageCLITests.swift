@@ -10,6 +10,7 @@ final class AppStageCLITests: XCTestCase {
         XCTAssertTrue(result.standardOutput.contains("list"))
         XCTAssertTrue(result.standardOutput.contains("snapshot"))
         XCTAssertTrue(result.standardOutput.contains("record"))
+        XCTAssertTrue(result.standardOutput.contains("capture-all"))
         XCTAssertTrue(result.standardOutput.contains("run"))
     }
 
@@ -73,6 +74,24 @@ final class AppStageCLITests: XCTestCase {
         ])
 
         XCTAssertEqual(command.backgroundImage, "/tmp/background.png")
+    }
+
+    func testCaptureAllParsesBatchOptionsWithoutSingleScenarioArguments() throws {
+        let command = try CaptureAllCommand.parse([
+            "--app", "/Applications/Example.app",
+            "--output-dir", "/tmp/captures",
+            "--background-image", "/tmp/background.png",
+            "--bundle-id", "com.example.fixture",
+            "--timeout", "42",
+            "--frame-rate", "30",
+            "--keep-app-running",
+        ])
+        XCTAssertEqual(command.outputDirectory, "/tmp/captures")
+        XCTAssertEqual(command.backgroundImage, "/tmp/background.png")
+        XCTAssertEqual(command.bundleID, "com.example.fixture")
+        XCTAssertEqual(command.timeout, 42)
+        XCTAssertEqual(command.frameRate, 30)
+        XCTAssertTrue(command.keepAppRunning)
     }
 
     func testSnapshotHelpIncludesBundleIdentifierAndOutputOptions() throws {

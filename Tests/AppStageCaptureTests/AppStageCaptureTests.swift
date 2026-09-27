@@ -6,6 +6,26 @@ import XCTest
 @testable import AppStageCapture
 
 final class AppStageCaptureTests: XCTestCase {
+    func testRecorderFailureSignalDeliversFirstFailureAndRespondsToCancellation() async throws {
+        let signal = StageVideoRecorderFailureSignal()
+        let waiter = Task { try await signal.wait() }
+        await Task.yield()
+        await signal.fail(.writingFailed("root cause"))
+        await signal.fail(.writingFailed("later error"))
+        do {
+            try await waiter.value
+        } catch let error as StageVideoRecorderError {
+            XCTAssertEqual(error, .writingFailed("root cause"))
+        }
+
+        let cancelledSignal = StageVideoRecorderFailureSignal()
+        let cancelledWaiter = Task { try await cancelledSignal.wait() }
+        cancelledWaiter.cancel()
+        do {
+            try await cancelledWaiter.value
+        } catch is CancellationError {}
+    }
+
     func testDisplayCaptureExcludesEveryOtherWindow() {
         let targetWindowID: CGWindowID = 42
         let windowIDs: [CGWindowID] = [7, targetWindowID, 19]

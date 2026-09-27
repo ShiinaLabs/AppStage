@@ -4,7 +4,7 @@ import CoreMedia
 import Foundation
 @preconcurrency import ScreenCaptureKit
 
-public enum StageVideoRecorderError: Error, Equatable {
+public enum StageVideoRecorderError: Error, Equatable, Sendable, LocalizedError {
     case alreadyStarted
     case transitionInProgress
     case notStarted
@@ -13,6 +13,18 @@ public enum StageVideoRecorderError: Error, Equatable {
     case firstFrameTimedOut
     case noVideoFrames
     case writingFailed(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .alreadyStarted: "The recorder has already started."
+        case .transitionInProgress: "The recorder is transitioning."
+        case .notStarted: "The recorder has not started."
+        case .outputAlreadyExists: "The output file already exists."
+        case let .writerSetupFailed(message), let .writingFailed(message): message
+        case .firstFrameTimedOut: "Timed out waiting for the first recorded frame."
+        case .noVideoFrames: "No video frames were recorded."
+        }
+    }
 }
 
 /// Records a display crop to a QuickTime MOV using ScreenCaptureKit and AVAssetWriter.
@@ -26,7 +38,8 @@ public actor StageVideoRecorder {
     private var writer: AVAssetWriter?
     private var sampleOutput: StageVideoSampleWriter?
     private var filterRefreshTask: Task<Void, Never>?
-    private var filterRefreshFailure: String?
+    private var filterRefreshFailure: StageVideoRecorderError?
+    private let failureSignal = StageVideoRecorderFailureSignal()
     private var lifecycle = StageVideoRecorderLifecycle()
     private var ownsOutputFile = false
 
@@ -149,7 +162,8 @@ public actor StageVideoRecorder {
             input: writerInput,
             pixelBufferAdaptor: pixelBufferAdaptor,
             frameCompositor: frameCompositor,
-            frameReadiness: readiness
+            frameReadiness: readiness,
+            failureSignal: failureSignal
         )
         let captureStream = SCStream(filter: filter, configuration: streamConfiguration, delegate: nil)
         try captureStream.addStreamOutput(
@@ -181,6 +195,11 @@ public actor StageVideoRecorder {
         ownsOutputFile = false
     }
 
+    /// Suspends until a fatal runtime recording error occurs, or throws when cancelled.
+    public func waitForFailure() async throws -> Never {
+        try await failureSignal.wait()
+    }
+
     public func stop() async throws {
         try lifecycle.beginStop()
         defer { lifecycle.completeStop() }
@@ -200,7 +219,7 @@ public actor StageVideoRecorder {
             self.writer = nil
             self.sampleOutput = nil
             discardOutputIfOwned()
-            throw StageVideoRecorderError.writingFailed("Capture filter refresh failed: \(filterRefreshFailure)")
+            throw filterRefreshFailure
         }
 
         do {
@@ -243,7 +262,6 @@ public actor StageVideoRecorder {
                 writer.error?.localizedDescription ?? "AVAssetWriter did not finish the MOV."
             )
         }
-        ownsOutputFile = false
     }
 
     private func startFilterRefresh() {
@@ -276,7 +294,9 @@ public actor StageVideoRecorder {
     }
 
     private func stopAfterFilterRefreshFailure(_ reason: String, stream: SCStream) async {
-        filterRefreshFailure = reason
+        let failure = StageVideoRecorderError.writingFailed("Capture filter refresh failed: \(reason)")
+        if filterRefreshFailure == nil { filterRefreshFailure = failure }
+        await failureSignal.fail(failure)
         try? await stream.stopCapture()
     }
 
@@ -285,12 +305,19 @@ public actor StageVideoRecorder {
 }
 
 private final class StageVideoSampleWriter: NSObject, SCStreamOutput, @unchecked Sendable {
+    private enum Result {
+        case skipped
+        case acceptedFirstFrame
+        case failed(StageVideoRecorderError)
+    }
+
     private let lock = NSLock()
     private let writer: AVAssetWriter
     private let input: AVAssetWriterInput
     private let pixelBufferAdaptor: AVAssetWriterInputPixelBufferAdaptor?
     private let frameCompositor: StageFrameCompositor?
     private let frameReadiness: StageVideoFrameReadiness
+    private let failureSignal: StageVideoRecorderFailureSignal
     private var didStartSession = false
     private var didAppendFrame = false
     private var storedFailureDescription: String?
@@ -300,13 +327,15 @@ private final class StageVideoSampleWriter: NSObject, SCStreamOutput, @unchecked
         input: AVAssetWriterInput,
         pixelBufferAdaptor: AVAssetWriterInputPixelBufferAdaptor?,
         frameCompositor: StageFrameCompositor?,
-        frameReadiness: StageVideoFrameReadiness
+        frameReadiness: StageVideoFrameReadiness,
+        failureSignal: StageVideoRecorderFailureSignal
     ) {
         self.writer = writer
         self.input = input
         self.pixelBufferAdaptor = pixelBufferAdaptor
         self.frameCompositor = frameCompositor
         self.frameReadiness = frameReadiness
+        self.failureSignal = failureSignal
     }
 
     var didCaptureVideo: Bool {
@@ -339,22 +368,32 @@ private final class StageVideoSampleWriter: NSObject, SCStreamOutput, @unchecked
             return
         }
 
-        let accepted = lock.withLock { () -> Bool in
+        let result = lock.withLock { () -> Result in
+            if storedFailureDescription != nil { return .skipped }
+            if writer.status == .failed {
+                return failLocked(writer.error?.localizedDescription ?? "AVAssetWriter failed while recording.")
+            }
+
             let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
             if !didStartSession {
                 writer.startSession(atSourceTime: presentationTime)
                 didStartSession = true
             }
 
-            guard input.isReadyForMoreMediaData else { return false }
+            let sourceBuffer: CVPixelBuffer?
+            if frameCompositor != nil {
+                guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+                    return failLocked(StageFrameCompositorError.sourceFrameUnavailable.localizedDescription)
+                }
+                sourceBuffer = buffer
+            } else {
+                sourceBuffer = nil
+            }
+
+            guard input.isReadyForMoreMediaData else { return .skipped }
             let didAppend: Bool
             if let frameCompositor, let pixelBufferAdaptor {
-                guard let sourceBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-                    let reason = StageFrameCompositorError.sourceFrameUnavailable.localizedDescription
-                    storedFailureDescription = reason
-                    Task { await frameReadiness.signalFailure(reason) }
-                    return false
-                }
+                guard let sourceBuffer else { return .skipped }
                 do {
                     let compositeBuffer = try frameCompositor.composite(
                         source: sourceBuffer,
@@ -365,26 +404,34 @@ private final class StageVideoSampleWriter: NSObject, SCStreamOutput, @unchecked
                         withPresentationTime: presentationTime
                     )
                 } catch {
-                    let reason = error.localizedDescription
-                    storedFailureDescription = reason
-                    Task { await frameReadiness.signalFailure(reason) }
-                    return false
+                    return failLocked(error.localizedDescription)
                 }
             } else {
                 didAppend = input.append(sampleBuffer)
             }
             guard didAppend else {
                 let reason = writer.error?.localizedDescription ?? "The video frame could not be appended."
-                storedFailureDescription = reason
-                if frameCompositor != nil {
-                    Task { await frameReadiness.signalFailure(reason) }
-                }
-                return false
+                return failLocked(reason)
             }
-            guard !didAppendFrame else { return false }
+            guard !didAppendFrame else { return .skipped }
             didAppendFrame = true
-            return true
+            return .acceptedFirstFrame
         }
-        if accepted { Task { await frameReadiness.signalFrameAccepted() } }
+        switch result {
+        case .skipped:
+            break
+        case .acceptedFirstFrame:
+            Task { await frameReadiness.signalFrameAccepted() }
+        case let .failed(error):
+            Task {
+                await frameReadiness.signalFailure(error.localizedDescription)
+                await failureSignal.fail(error)
+            }
+        }
+    }
+
+    private func failLocked(_ reason: String) -> Result {
+        if storedFailureDescription == nil { storedFailureDescription = reason }
+        return .failed(.writingFailed(storedFailureDescription ?? reason))
     }
 }
