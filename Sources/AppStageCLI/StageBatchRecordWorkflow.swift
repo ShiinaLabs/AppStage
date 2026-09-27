@@ -5,41 +5,35 @@ import Foundation
 
 @MainActor
 final class StageBatchRecordWorkflow {
-    private let recordWorkflow: StageRecordWorkflow
+    typealias DiscoverScenarios = @MainActor () async throws -> [StageScenarioMetadata]
+    typealias RecordScenario = @MainActor (StageScenarioID, URL) async throws -> Void
+
+    private let discoverScenarios: DiscoverScenarios
+    private let recordScenario: RecordScenario
     private let outputDirectory: URL
     private let manifestURL: URL
     private let bundleIdentifier: String
     private let captureConfiguration: StageCaptureConfiguration
     private let horizontalMargin: Double
     private let verticalMargin: Double
-    private let timeout: Duration
-    private let token: String
-    private let sessionID: UUID
-    private let existingApplicationPolicy: StageExistingApplicationPolicy
 
     init(
-        recordWorkflow: StageRecordWorkflow,
+        discoverScenarios: @escaping DiscoverScenarios,
+        recordScenario: @escaping RecordScenario,
         outputDirectory: URL,
         bundleIdentifier: String,
         captureConfiguration: StageCaptureConfiguration,
         horizontalMargin: Double,
-        verticalMargin: Double,
-        timeout: Duration,
-        token: String,
-        sessionID: UUID,
-        existingApplicationPolicy: StageExistingApplicationPolicy
+        verticalMargin: Double
     ) {
-        self.recordWorkflow = recordWorkflow
+        self.discoverScenarios = discoverScenarios
+        self.recordScenario = recordScenario
         self.outputDirectory = outputDirectory.standardizedFileURL
         self.manifestURL = outputDirectory.standardizedFileURL.appendingPathComponent("manifest.json")
         self.bundleIdentifier = bundleIdentifier
         self.captureConfiguration = captureConfiguration
         self.horizontalMargin = horizontalMargin
         self.verticalMargin = verticalMargin
-        self.timeout = timeout
-        self.token = token
-        self.sessionID = sessionID
-        self.existingApplicationPolicy = existingApplicationPolicy
     }
 
     func run() async throws {
@@ -47,15 +41,7 @@ final class StageBatchRecordWorkflow {
         var activeScenarioIndex: Int?
         do {
             try prepareOutputDirectory()
-            _ = try await recordWorkflow.startSession(
-                bundleIdentifier: bundleIdentifier,
-                token: token,
-                sessionID: sessionID,
-                timeout: timeout,
-                existingApplicationPolicy: existingApplicationPolicy
-            )
-
-            let scenarios = try await recordWorkflow.discoverScenarios(timeout: timeout)
+            let scenarios = try await discoverScenarios()
             let preflight = try preflight(scenarios)
             manifest = StageCaptureManifest(
                 bundleIdentifier: bundleIdentifier,
@@ -83,12 +69,7 @@ final class StageBatchRecordWorkflow {
                 print("[\(index + 1)/\(preflight.count)] \(item.metadata.id.rawValue)")
                 print("Recording...")
                 let movieURL = outputDirectory.appendingPathComponent(item.fileName)
-                try await recordWorkflow.recordScenario(
-                    item.metadata.id,
-                    bundleIdentifier: bundleIdentifier,
-                    timeout: timeout,
-                    outputURL: movieURL
-                )
+                try await recordScenario(item.metadata.id, movieURL)
                 manifest?.scenarios[index].status = .completed
                 manifest?.scenarios[index].error = nil
                 try manifest?.write(to: manifestURL)
@@ -98,7 +79,6 @@ final class StageBatchRecordWorkflow {
 
             manifest?.finish(.completed)
             try manifest?.write(to: manifestURL)
-            await recordWorkflow.close()
             print("Batch completed.")
             print("Manifest: \(manifestURL.path)")
         } catch {
@@ -116,7 +96,6 @@ final class StageBatchRecordWorkflow {
                 current.finish(error is CancellationError ? .cancelled : .failed)
                 try? current.write(to: manifestURL)
             }
-            await recordWorkflow.close()
             if let activeScenarioIndex, let manifest {
                 let item = manifest.scenarios[activeScenarioIndex]
                 print("Failed: \(item.id)")

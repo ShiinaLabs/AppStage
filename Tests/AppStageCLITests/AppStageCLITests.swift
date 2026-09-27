@@ -84,14 +84,18 @@ final class AppStageCLITests: XCTestCase {
             "--bundle-id", "com.example.fixture",
             "--timeout", "42",
             "--frame-rate", "30",
-            "--keep-app-running",
         ])
         XCTAssertEqual(command.outputDirectory, "/tmp/captures")
         XCTAssertEqual(command.backgroundImage, "/tmp/background.png")
         XCTAssertEqual(command.bundleID, "com.example.fixture")
         XCTAssertEqual(command.timeout, 42)
         XCTAssertEqual(command.frameRate, 30)
-        XCTAssertTrue(command.keepAppRunning)
+        XCTAssertFalse(command.replaceExisting)
+        XCTAssertThrowsError(try CaptureAllCommand.parse([
+            "--app", "/Applications/Example.app",
+            "--output-dir", "/tmp/captures",
+            "--keep-app-running",
+        ]))
     }
 
     func testSnapshotHelpIncludesBundleIdentifierAndOutputOptions() throws {

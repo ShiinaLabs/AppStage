@@ -118,6 +118,31 @@ final class StageRecordWorkflow {
         return scenarios
     }
 
+    func runDiscovery(
+        bundleIdentifier: String,
+        token: String,
+        sessionID: UUID,
+        timeout: Duration,
+        existingApplicationPolicy: StageExistingApplicationPolicy
+    ) async throws -> [StageScenarioMetadata] {
+        do {
+            _ = try await startSession(
+                bundleIdentifier: bundleIdentifier,
+                initialScenarioID: nil,
+                token: token,
+                sessionID: sessionID,
+                timeout: timeout,
+                existingApplicationPolicy: existingApplicationPolicy
+            )
+            let scenarios = try await discoverScenarios(timeout: timeout)
+            await close()
+            return scenarios
+        } catch {
+            await close()
+            throw error
+        }
+    }
+
     func close() async {
         await controller.close()
         await session?.finish()

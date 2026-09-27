@@ -58,6 +58,60 @@ final class StageRecordWorkflowTests: XCTestCase {
         }
     }
 
+    func testRunDiscoveryStartsListsAndClosesTheDiscoveryProcess() async throws {
+        let log = Log()
+        let scenarios = [StageScenarioMetadata(id: StageScenarioID("walkthrough"))]
+        let workflow = StageRecordWorkflow(
+            controller: FakeController(log: log, scenarios: scenarios),
+            openSession: { arguments, _ in
+                let launch = try StageLaunchConfiguration(arguments: arguments)
+                XCTAssertNil(launch.scenarioID)
+                XCTAssertTrue(launch.discoverScenarios)
+                log.append("launch")
+                return FakeSession(log: log)
+            },
+            makeRecorder: { _, _, _ in XCTFail("Discovery must not record"); return FakeRecorder(log: log) }
+        )
+
+        let discovered = try await workflow.runDiscovery(
+            bundleIdentifier: "com.example.fixture",
+            token: "secret",
+            sessionID: UUID(),
+            timeout: .seconds(30),
+            existingApplicationPolicy: .reject
+        )
+
+        XCTAssertEqual(discovered.map(\.id.rawValue), ["walkthrough"])
+        XCTAssertEqual(log.values, ["listenerReady", "launch", "handshake", "list", "controllerClose", "appCleanup"])
+    }
+
+    func testRunDiscoveryClosesTheProcessWhenListingFails() async throws {
+        let log = Log()
+        let workflow = StageRecordWorkflow(
+            controller: FakeController(log: log, failOnList: true),
+            openSession: { arguments, _ in
+                let launch = try StageLaunchConfiguration(arguments: arguments)
+                XCTAssertTrue(launch.discoverScenarios)
+                log.append("launch")
+                return FakeSession(log: log)
+            },
+            makeRecorder: { _, _, _ in XCTFail("Discovery must not record"); return FakeRecorder(log: log) }
+        )
+
+        do {
+            _ = try await workflow.runDiscovery(
+                bundleIdentifier: "com.example.fixture",
+                token: "secret",
+                sessionID: UUID(),
+                timeout: .seconds(30),
+                existingApplicationPolicy: .reject
+            )
+            XCTFail("Expected discovery failure")
+        } catch StageControlError.remoteFailure {}
+
+        XCTAssertEqual(log.values.suffix(2), ["controllerClose", "appCleanup"])
+    }
+
     func testExistingApplicationRejectionSkipsCaptureAndCleanup() async throws {
         let log = Log()
         let workflow = StageRecordWorkflow(
@@ -148,16 +202,30 @@ final class StageRecordWorkflowTests: XCTestCase {
     let log: Log
     let failOnFinished: Bool
     let blockFinishedUntilCancelled: Bool
-    init(log: Log, failOnFinished: Bool = false, blockFinishedUntilCancelled: Bool = false) {
+    let scenarios: [StageScenarioMetadata]?
+    let failOnList: Bool
+    init(
+        log: Log,
+        failOnFinished: Bool = false,
+        blockFinishedUntilCancelled: Bool = false,
+        scenarios: [StageScenarioMetadata]? = nil,
+        failOnList: Bool = false
+    ) {
         self.log = log
         self.failOnFinished = failOnFinished
         self.blockFinishedUntilCancelled = blockFinishedUntilCancelled
+        self.scenarios = scenarios
+        self.failOnList = failOnList
     }
     func start() async throws -> UInt16 { log.append("listenerReady"); return 49152 }
     func bindExpectedPID(_ pid: Int32) async { XCTAssertEqual(pid, 123) }
     func waitForHandshake(timeout: Duration) async throws { log.append("handshake") }
     func request(_ command: StageControlCommand, timeout: Duration) async throws -> StageControlSnapshot {
         switch command {
+        case .listScenarios:
+            log.append("list")
+            if failOnList { throw StageControlError.remoteFailure("fixture discovery failure") }
+            return StageControlSnapshot(state: .connected, scenarios: scenarios)
         case let .loadScenario(id): log.append("load:\(id.rawValue)")
         case .prepare: log.append("prepare")
         case .play: log.append("play")

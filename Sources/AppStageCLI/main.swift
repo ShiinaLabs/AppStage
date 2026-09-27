@@ -410,7 +410,7 @@ struct RecordCommand: AsyncParsableCommand {
 struct CaptureAllCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "capture-all",
-        abstract: "Record every scenario exposed by a controlled app into one output directory."
+        abstract: "Record each scenario in a fresh controlled app process, sequentially."
     )
 
     @Option(name: .long, help: "Path to the target .app bundle.")
@@ -436,9 +436,6 @@ struct CaptureAllCommand: AsyncParsableCommand {
 
     @Option(name: .long, help: "Output frame rate.")
     var frameRate: Int = 60
-
-    @Flag(name: .long, help: "Keep an application launched by AppStage running after capture finishes. Pre-existing applications are never terminated.")
-    var keepAppRunning = false
 
     @Flag(name: .long, help: "Terminate an already running target app and launch a new controlled instance.")
     var replaceExisting = false
@@ -497,50 +494,44 @@ struct CaptureAllCommand: AsyncParsableCommand {
         }
 
         let captureTask = Task { @MainActor in
-            let token = try StageControlToken.generate()
-            let sessionID = UUID()
-            let recorderWorkflow = StageRecordWorkflow(
-                controller: StageSystemRecordController(
-                    underlying: StageControlController(
-                        token: token, sessionID: sessionID, bundleIdentifier: applicationBundleID,
-                        accessibilityHandler: { operation, pid in StageAccessibilityController.handle(operation, pid: pid) }
-                    )
-                ),
-                openSession: { arguments, policy in
-                    try await StageAppSession.open(
+            let workflow = StageBatchRecordWorkflow(
+                discoverScenarios: {
+                    let (recordWorkflow, token, sessionID) = try makeBatchRoundWorkflow(
                         appURL: applicationURL,
                         bundleIdentifier: applicationBundleID,
-                        arguments: arguments,
-                        keepAppRunning: keepAppRunning,
-                        existingApplicationPolicy: policy
-                    )
-                },
-                makeRecorder: { pid, bundleID, outputURL in
-                    let window = try await waitForWindow(
-                        bundleIdentifier: bundleID,
-                        processIdentifier: pid,
+                        captureConfiguration: captureConfiguration,
                         timeout: .seconds(timeout)
                     )
-                    let targetDisplay = try await display(for: window)
-                    return StageSystemRecordRecorder(underlying: StageVideoRecorder(
-                        window: window,
-                        display: targetDisplay,
-                        configuration: captureConfiguration,
-                        outputURL: outputURL
-                    ))
-                }
-            )
-            let workflow = StageBatchRecordWorkflow(
-                recordWorkflow: recorderWorkflow,
+                    return try await recordWorkflow.runDiscovery(
+                        bundleIdentifier: applicationBundleID,
+                        token: token,
+                        sessionID: sessionID,
+                        timeout: .seconds(timeout),
+                        existingApplicationPolicy: replaceExisting ? .replace : .reject
+                    )
+                },
+                recordScenario: { scenarioID, movieURL in
+                    let (recordWorkflow, token, sessionID) = try makeBatchRoundWorkflow(
+                        appURL: applicationURL,
+                        bundleIdentifier: applicationBundleID,
+                        captureConfiguration: captureConfiguration,
+                        timeout: .seconds(timeout)
+                    )
+                    try await recordWorkflow.run(
+                        scenarioID: scenarioID,
+                        bundleIdentifier: applicationBundleID,
+                        token: token,
+                        sessionID: sessionID,
+                        timeout: .seconds(timeout),
+                        existingApplicationPolicy: replaceExisting ? .replace : .reject,
+                        outputURL: movieURL
+                    )
+                },
                 outputDirectory: URL(fileURLWithPath: outputDirectory).standardizedFileURL,
                 bundleIdentifier: applicationBundleID,
                 captureConfiguration: captureConfiguration,
                 horizontalMargin: horizontalMargin,
-                verticalMargin: verticalMargin,
-                timeout: .seconds(timeout),
-                token: token,
-                sessionID: sessionID,
-                existingApplicationPolicy: replaceExisting ? .replace : .reject
+                verticalMargin: verticalMargin
             )
             try await workflow.run()
         }
@@ -552,6 +543,53 @@ struct CaptureAllCommand: AsyncParsableCommand {
             throw ValidationError("Batch capture cancelled.")
         }
     }
+}
+
+@MainActor
+private func makeBatchRoundWorkflow(
+    appURL: URL,
+    bundleIdentifier: String,
+    captureConfiguration: StageCaptureConfiguration,
+    timeout: Duration
+) throws -> (workflow: StageRecordWorkflow, token: String, sessionID: UUID) {
+    let token = try StageControlToken.generate()
+    let sessionID = UUID()
+    let controller = StageSystemRecordController(
+        underlying: StageControlController(
+            token: token,
+            sessionID: sessionID,
+            bundleIdentifier: bundleIdentifier,
+            accessibilityHandler: { operation, pid in
+                StageAccessibilityController.handle(operation, pid: pid)
+            }
+        )
+    )
+    let workflow = StageRecordWorkflow(
+        controller: controller,
+        openSession: { arguments, policy in
+            try await StageAppSession.open(
+                appURL: appURL,
+                bundleIdentifier: bundleIdentifier,
+                arguments: arguments,
+                existingApplicationPolicy: policy
+            )
+        },
+        makeRecorder: { pid, bundleID, outputURL in
+            let window = try await waitForWindow(
+                bundleIdentifier: bundleID,
+                processIdentifier: pid,
+                timeout: timeout
+            )
+            let targetDisplay = try await display(for: window)
+            return StageSystemRecordRecorder(underlying: StageVideoRecorder(
+                window: window,
+                display: targetDisplay,
+                configuration: captureConfiguration,
+                outputURL: outputURL
+            ))
+        }
+    )
+    return (workflow, token, sessionID)
 }
 
 private func captureTarget(bundleIdentifier: String) async throws -> (StageCaptureWindow, StageCaptureDisplay) {
