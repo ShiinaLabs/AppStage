@@ -202,7 +202,7 @@ private final class FakeApplicationManager: StageApplicationManaging {
     private(set) var launchCount = 0
     private let eventLog: EventLog?
 
-    init(running: [any StageApplicationHandle] = [], launched: any StageApplicationHandle? = nil, eventLog: EventLog? = nil) {
+    init(running: [any StageApplicationHandle] = [], launched: (any StageApplicationHandle)? = nil, eventLog: EventLog? = nil) {
         self.running = running
         self.launched = launched ?? FakeApplication(pid: 99, bundleIdentifier: "com.example.fixture")
         self.eventLog = eventLog
