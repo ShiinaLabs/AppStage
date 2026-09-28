@@ -594,11 +594,13 @@ struct DoctorCommand: AsyncParsableCommand {
     func run() async throws {
         let appURL = URL(fileURLWithPath: (app as NSString).expandingTildeInPath).standardizedFileURL
         let outputURL = output.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath).standardizedFileURL }
-        let report = StageDoctor.inspect(appURL: appURL, outputURL: outputURL)
         if let outputURL {
             try FileManager.default.createDirectory(
                 at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true
             )
+        }
+        let report = StageDoctor.inspect(appURL: appURL, outputURL: outputURL)
+        if let outputURL {
             try writeJSON(report, to: outputURL)
         }
         if json {

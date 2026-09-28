@@ -96,7 +96,8 @@ enum StageDoctor {
                 : "Target app has running PID(s): \(runningTargets.map { String($0.processIdentifier) }.joined(separator: ", "))"
         ))
 
-        let diskURL = (outputURL?.deletingLastPathComponent() ?? appURL.deletingLastPathComponent())
+        let requestedDiskURL = outputURL?.deletingLastPathComponent() ?? appURL.deletingLastPathComponent()
+        let diskURL = existingAncestor(for: requestedDiskURL)
         let availableBytes = try? diskURL.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
             .volumeAvailableCapacityForImportantUsage
         let diskEnough = (availableBytes ?? 0) >= minimumFreeBytes
@@ -125,6 +126,21 @@ enum StageDoctor {
             hostBundleID: bundleID,
             checks: checks
         )
+    }
+
+    static func existingAncestor(for url: URL) -> URL {
+        var candidate = url.standardizedFileURL
+        let fileManager = FileManager.default
+
+        while !fileManager.fileExists(atPath: candidate.path) {
+            let parent = candidate.deletingLastPathComponent()
+            if parent.path == candidate.path {
+                break
+            }
+            candidate = parent
+        }
+
+        return candidate
     }
 
     private static func commandOutput(_ path: String, arguments: [String], directory: URL? = nil) -> String? {
