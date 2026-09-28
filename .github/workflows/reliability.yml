@@ -28,11 +28,16 @@ jobs:
     runs-on: [self-hosted, macOS, appstage-gui]
     timeout-minutes: 90
     env:
-      REPORT_ROOT: ${{ runner.temp }}/appstage-reliability
       FIXTURE_APP: ${{ github.workspace }}/Fixtures/AppStageTestHost/build/Build/Products/Debug/AppStageTestHost.app
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+
+      - name: Initialize reliability paths
+        shell: bash
+        run: |
+          echo "REPORT_ROOT=$RUNNER_TEMP/appstage-reliability" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/appstage-reliability"
 
       - name: Prevent runner sleep during GUI verification
         run: |
