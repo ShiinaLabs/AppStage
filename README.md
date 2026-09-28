@@ -12,6 +12,7 @@ MOV assets from the command line.
 - Captures screenshots and MOV recordings.
 - Composes recordings onto a custom video canvas.
 - Records batches with a fresh app process for each scenario.
+- Repeats discovered scenarios with `appstage verify` and validates each MOV.
 
 ## How it works
 
@@ -25,6 +26,9 @@ appstage record --app "/Applications/Example.app" --scenario walkthrough \
 
 appstage capture-all --app "/Applications/Example.app" \
   --output-dir ./Artifacts/batch
+
+appstage verify --app "/Applications/Example.app" \
+  --iterations 20 --output ~/Desktop/AppStage-Verify
 ```
 
 ## Documentation

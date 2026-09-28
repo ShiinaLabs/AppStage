@@ -17,7 +17,14 @@ protocol StageRecordControlling: Sendable {
 protocol StageRecordSessioning {
     var processIdentifier: pid_t { get }
     var bundleIdentifier: String { get }
+    var isTerminated: Bool { get }
+    var terminationStatus: Int32 { get }
     func finish() async
+}
+
+extension StageRecordSessioning {
+    var isTerminated: Bool { false }
+    var terminationStatus: Int32 { 0 }
 }
 
 @MainActor
@@ -32,19 +39,29 @@ extension StageAppSession: StageRecordSessioning {}
 
 @MainActor
 final class StageRecordWorkflow {
+    enum Phase: String, Codable {
+        case controlListen, launch, controlConnect, loadScenario, prepareScenario
+        case recordingStart, playScenario, scenarioRuntime, recordingFinalize
+        case processTermination, cleanup, controlDisconnect, movieValidation, recordingCleanup, finishEventMissing
+    }
+
+    typealias EventHandler = @MainActor (Phase, String, Int32?, Int64?) -> Void
     private let controller: any StageRecordControlling
     private let openSession: @MainActor ([String], StageExistingApplicationPolicy) async throws -> any StageRecordSessioning
     private let makeRecorder: @MainActor (pid_t, String, URL) async throws -> any StageRecordRecording
     private var session: (any StageRecordSessioning)?
+    private let eventHandler: EventHandler
 
     init(
         controller: any StageRecordControlling,
         openSession: @escaping @MainActor ([String], StageExistingApplicationPolicy) async throws -> any StageRecordSessioning,
-        makeRecorder: @escaping @MainActor (pid_t, String, URL) async throws -> any StageRecordRecording
+        makeRecorder: @escaping @MainActor (pid_t, String, URL) async throws -> any StageRecordRecording,
+        eventHandler: @escaping EventHandler = { _, _, _, _ in }
     ) {
         self.controller = controller
         self.openSession = openSession
         self.makeRecorder = makeRecorder
+        self.eventHandler = eventHandler
     }
 
     func startSession(
@@ -55,7 +72,13 @@ final class StageRecordWorkflow {
         timeout: Duration,
         existingApplicationPolicy: StageExistingApplicationPolicy
     ) async throws -> any StageRecordSessioning {
-        let port = try await controller.start()
+        let port: UInt16
+        do { port = try await controller.start() }
+        catch {
+            eventHandler(.controlListen, "failure: \(error.localizedDescription)", nil, nil)
+            throw error
+        }
+        eventHandler(.controlListen, "control server ready", nil, nil)
         try Task.checkCancellation()
         var arguments = [
             "--appstage-window", "1100x760",
@@ -69,10 +92,18 @@ final class StageRecordWorkflow {
         } else {
             arguments.insert("--appstage-discover-scenarios", at: 0)
         }
-        let opened = try await openSession(arguments, existingApplicationPolicy)
+        let opened: any StageRecordSessioning
+        do { opened = try await openSession(arguments, existingApplicationPolicy) }
+        catch {
+            eventHandler(.launch, "failure: \(error.localizedDescription)", nil, nil)
+            throw error
+        }
         session = opened
+        eventHandler(.launch, "child launched", Int32(opened.processIdentifier), nil)
         await controller.bindExpectedPID(opened.processIdentifier)
-        try await controller.waitForHandshake(timeout: timeout)
+        try await timed(.controlConnect, name: "child control handshake accepted") {
+            try await controller.waitForHandshake(timeout: timeout)
+        }
         return opened
     }
 
@@ -87,25 +118,47 @@ final class StageRecordWorkflow {
         var recording = false
         var outputOwnedByWorkflow = false
         do {
-            _ = try await controller.request(.loadScenario(scenarioID), timeout: timeout)
-            _ = try await controller.request(.prepare, timeout: timeout)
-            try await controller.waitForEvent(.ready, timeout: timeout)
+            _ = try await timed(.loadScenario, name: "scenario loaded") {
+                try await controller.request(.loadScenario(scenarioID), timeout: timeout)
+            }
+            _ = try await timed(.prepareScenario, name: "scenario prepared") {
+                let snapshot = try await controller.request(.prepare, timeout: timeout)
+                try await controller.waitForEvent(.ready, timeout: timeout)
+                return snapshot
+            }
             try Task.checkCancellation()
-            let capture = try await makeRecorder(session.processIdentifier, bundleIdentifier, outputURL)
+            let capture = try await timed(.recordingStart, name: "recording started") {
+                let capture = try await makeRecorder(session.processIdentifier, bundleIdentifier, outputURL)
+                try await capture.start()
+                return capture
+            }
             recorder = capture
-            try await capture.start()
             recording = true
             outputOwnedByWorkflow = true
             try Task.checkCancellation()
-            _ = try await controller.request(.play, timeout: timeout)
-            try await waitForFinishOrRecorderFailure(capture, timeout: timeout)
+            _ = try await timed(.playScenario, name: "scenario playing") {
+                try await controller.request(.play, timeout: timeout)
+            }
+            try await timed(.scenarioRuntime, name: "scenario finished") {
+                try await waitForFinishOrRecorderFailure(capture, timeout: timeout)
+            }
             recording = false
-            try await capture.stop()
+            try await timed(.recordingFinalize, name: "recording finalized") { try await capture.stop() }
             try Task.checkCancellation()
             outputOwnedByWorkflow = false
         } catch {
-            if recording { try? await recorder?.stop() }
+            var recorderCleanupPassed = true
+            if recording {
+                do { try await recorder?.stop() }
+                catch { recorderCleanupPassed = false }
+            }
             if outputOwnedByWorkflow { await recorder?.discardOutputIfOwned() }
+            eventHandler(
+                .recordingCleanup,
+                recorderCleanupPassed ? "recorder cleanup completed" : "failure: recorder cleanup failed",
+                nil,
+                nil
+            )
             throw error
         }
     }
@@ -145,8 +198,35 @@ final class StageRecordWorkflow {
 
     func close() async {
         await controller.close()
+        eventHandler(.controlDisconnect, "control connection closed", nil, nil)
         await session?.finish()
+        if let session {
+            eventHandler(.processTermination, session.isTerminated ? "child exited" : "child remains alive", session.terminationStatus, nil)
+        }
+        eventHandler(.cleanup, "cleanup completed", nil, nil)
         session = nil
+    }
+
+    private func timed<T>(_ phase: Phase, name: String, operation: () async throws -> T) async throws -> T {
+        let start = ContinuousClock.now
+        do {
+            let value = try await operation()
+            let duration = start.duration(to: .now).components
+            let milliseconds = Int64(duration.seconds * 1_000 + duration.attoseconds / 1_000_000_000_000_000)
+            eventHandler(phase, name, nil, milliseconds)
+            return value
+        } catch {
+            let failedPhase: Phase
+            if phase == .scenarioRuntime,
+               let controlError = error as? StageControlError,
+               case .timedOut = controlError {
+                failedPhase = .finishEventMissing
+            } else {
+                failedPhase = phase
+            }
+            eventHandler(failedPhase, "failure: \(error.localizedDescription)", nil, nil)
+            throw error
+        }
     }
 
     func run(

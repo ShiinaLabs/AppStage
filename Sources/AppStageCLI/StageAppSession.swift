@@ -36,6 +36,8 @@ final class StageAppSession {
     let ownership: StageAppOwnership
     let processIdentifier: pid_t
     let bundleIdentifier: String
+    var isTerminated: Bool { application.isTerminated }
+    var terminationStatus: Int32 { application.terminationStatus }
 
     private let application: any StageApplicationHandle
     private let keepAppRunning: Bool
@@ -136,6 +138,7 @@ final class StageAppSession {
         let exited = await application.waitUntilTerminated(gracePeriod: terminationGracePeriod)
         guard !exited, ownsExactLiveInstance else { return }
         application.forceTerminate()
+        _ = await application.waitUntilTerminated(gracePeriod: terminationGracePeriod)
     }
 
     func performCapture<T>(_ operation: () async throws -> T) async throws -> T {

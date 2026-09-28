@@ -1,10 +1,11 @@
 # Capture
 
-AppStage provides three capture commands:
+AppStage provides four capture commands:
 
 - `snapshot` writes a PNG of a running app window with desktop around it.
 - `record` launches and records one Scenario to a MOV.
 - `capture-all` discovers Scenarios and writes one MOV for each, plus `manifest.json`.
+- `verify` repeats every discovered Scenario in fresh processes and validates each MOV.
 
 ## Single recording
 
@@ -30,6 +31,29 @@ The discovery process and every Scenario process are closed as their round
 finishes. This isolates UI state and avoids cross-Scenario navigation or focus
 contamination. It neither reuses one app process to switch Scenarios nor records
 multiple Scenarios in parallel.
+
+## Reliability verification
+
+```sh
+appstage verify --app "/Applications/Example.app" \
+  --iterations 20 --output ~/Desktop/AppStage-Verify
+```
+
+`verify` discovers the Host's Scenarios, then runs each one sequentially in a
+fresh controlled process for every iteration. It records per-attempt lifecycle
+events, PID and exit status, cleanup state, and MOV validation results. AVFoundation
+reopens each MOV and checks for a readable video track, positive duration and
+dimensions, at least two frames with increasing presentation timestamps, and a
+minimum file size. Any failed attempt makes the command exit non-zero.
+
+Each invocation creates a timestamped `run-*` directory containing
+`summary.json`, `summary.txt`, and per-scenario `attempt-*` folders with
+`result.json`, `trace.json`, and `recording.mov`. Failed attempts also include
+`diagnostics.json`.
+
+Control Protocol v3 does not report Host-internal condition IDs or detailed AX
+snapshots. The current report marks those telemetry sources unavailable rather
+than inferring them from video or treating a successful command as evidence.
 
 Each Scenario starts with its ID in `--appstage-scenario`, so the Host can choose
 its initial route and state at launch. The Host does not need runtime navigation
