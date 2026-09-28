@@ -117,7 +117,7 @@ final class StageAppSessionTests: XCTestCase {
 
         await session.finish()
 
-        XCTAssertEqual(app.events, ["terminate", "wait", "forceTerminate"])
+        XCTAssertEqual(app.events, ["terminate", "wait", "forceTerminate", "wait"])
     }
 
     func testCaptureFailureStillCleansUpOwnedApp() async throws {

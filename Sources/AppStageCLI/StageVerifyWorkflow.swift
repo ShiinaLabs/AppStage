@@ -1,5 +1,6 @@
 import AVFoundation
 import AppStage
+import CoreVideo
 import Foundation
 
 struct StageVerifyEvent: Codable {
@@ -81,6 +82,8 @@ struct StageVerifySummary: Codable {
     let determinismWarnings: [String]
     let telemetryNotes: [String]
     let attempts: [StageVerifyAttempt]
+    let setupFailurePhase: String?
+    let setupFailure: String?
 }
 
 enum StageVerifyWorkflow {
@@ -111,7 +114,10 @@ enum StageVerifyWorkflow {
         }
 
         let reader = try AVAssetReader(asset: asset)
-        let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+        let output = AVAssetReaderTrackOutput(
+            track: track,
+            outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        )
         guard reader.canAdd(output) else { throw StageVerifyError.invalidMovie("Could not read video samples") }
         reader.add(output)
         guard reader.startReading() else {
@@ -128,7 +134,10 @@ enum StageVerifyWorkflow {
                 throw StageVerifyError.invalidMovie("Video frame has an invalid presentation timestamp")
             }
             if previousTime.isValid, CMTimeCompare(time, previousTime) <= 0 {
-                throw StageVerifyError.invalidMovie("Video presentation timestamps are not strictly increasing")
+                throw StageVerifyError.invalidMovie(
+                    "Video presentation timestamps are not strictly increasing at frame \(frames): "
+                        + "\(previousTime.value)/\(previousTime.timescale) then \(time.value)/\(time.timescale)"
+                )
             }
             previousTime = time
             if firstPTS == nil { firstPTS = time.seconds }

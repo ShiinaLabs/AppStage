@@ -37,7 +37,6 @@ final class StageAppSession {
     let processIdentifier: pid_t
     let bundleIdentifier: String
     var isTerminated: Bool { application.isTerminated }
-    var terminationStatus: Int32 { application.terminationStatus }
 
     private let application: any StageApplicationHandle
     private let keepAppRunning: Bool

@@ -36,6 +36,7 @@ appstage verify --app "/Applications/Example.app" \
 - [Getting started](docs/getting-started.md)
 - [Designing scenarios](docs/scenarios.md)
 - [Capture commands and output](docs/capture.md)
+- [Reliability CI](docs/reliability-ci.md)
 
 ## Requirements
 

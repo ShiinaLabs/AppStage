@@ -46,6 +46,10 @@ reopens each MOV and checks for a readable video track, positive duration and
 dimensions, at least two frames with increasing presentation timestamps, and a
 minimum file size. Any failed attempt makes the command exit non-zero.
 
+Use `--retain-movies failures|all|none` to control the verified video output.
+The default is `failures`: passed recordings are removed after validation and
+failed recordings are kept when available.
+
 Each invocation creates a timestamped `run-*` directory containing
 `summary.json`, `summary.txt`, and per-scenario `attempt-*` folders with
 `result.json`, `trace.json`, and `recording.mov`. Failed attempts also include
@@ -54,6 +58,11 @@ Each invocation creates a timestamped `run-*` directory containing
 Control Protocol v3 does not report Host-internal condition IDs or detailed AX
 snapshots. The current report marks those telemetry sources unavailable rather
 than inferring them from video or treating a successful command as evidence.
+
+`appstage doctor --app "/Applications/Example.app" --json \
+  --output ./Artifacts/environment.json` checks the GUI session, macOS version,
+Accessibility and Screen Recording permissions, display, target bundle, stale
+target processes, available disk space, Xcode, and Swift before a GUI run.
 
 Each Scenario starts with its ID in `--appstage-scenario`, so the Host can choose
 its initial route and state at launch. The Host does not need runtime navigation

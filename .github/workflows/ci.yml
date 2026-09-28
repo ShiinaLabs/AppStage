@@ -1,0 +1,32 @@
+name: AppStage Core CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: AppStage Core CI
+    runs-on: macos-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Resolve packages
+        run: swift package resolve
+
+      - name: Debug build
+        run: swift build
+
+      - name: Unit tests
+        run: swift test
+
+      - name: Release build
+        run: swift build -c release

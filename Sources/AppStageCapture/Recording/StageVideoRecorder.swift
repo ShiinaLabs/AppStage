@@ -322,6 +322,7 @@ private final class StageVideoSampleWriter: NSObject, SCStreamOutput, @unchecked
     private let failureSignal: StageVideoRecorderFailureSignal
     private var didStartSession = false
     private var didAppendFrame = false
+    private var lastAppendedPresentationTime = CMTime.invalid
     private var storedFailureDescription: String?
 
     init(
@@ -378,6 +379,20 @@ private final class StageVideoSampleWriter: NSObject, SCStreamOutput, @unchecked
             }
 
             let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            guard presentationTime.isNumeric, presentationTime.seconds.isFinite else {
+                return failLocked("Captured video frame has an invalid presentation timestamp.")
+            }
+            if lastAppendedPresentationTime.isValid {
+                let comparison = CMTimeCompare(presentationTime, lastAppendedPresentationTime)
+                if comparison == 0 { return .skipped }
+                guard comparison > 0 else {
+                    return failLocked(
+                        "Captured video presentation timestamp moved backwards from "
+                            + "\(lastAppendedPresentationTime.value)/\(lastAppendedPresentationTime.timescale) to "
+                            + "\(presentationTime.value)/\(presentationTime.timescale)."
+                    )
+                }
+            }
             if !didStartSession {
                 writer.startSession(atSourceTime: presentationTime)
                 didStartSession = true
@@ -412,6 +427,7 @@ private final class StageVideoSampleWriter: NSObject, SCStreamOutput, @unchecked
                 let reason = writer.error?.localizedDescription ?? "The video frame could not be appended."
                 return failLocked(reason)
             }
+            lastAppendedPresentationTime = presentationTime
             guard !didAppendFrame else { return .skipped }
             didAppendFrame = true
             return .acceptedFirstFrame

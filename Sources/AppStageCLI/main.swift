@@ -13,6 +13,7 @@ struct AppStageCommand: AsyncParsableCommand {
         subcommands: [
             ListCommand.self, ScenariosCommand.self, RunCommand.self,
             SnapshotCommand.self, RecordCommand.self, CaptureAllCommand.self, VerifyCommand.self,
+            DoctorCommand.self,
         ]
     )
 }
@@ -556,10 +557,14 @@ struct VerifyCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Independent recordings per scenario (default: 20).") var iterations = 20
     @Option(name: .long, help: "Root output directory for this verification run.") var output: String = "~/Desktop/AppStage-Verify"
     @Option(name: .long, help: "Timeout in seconds per Control/lifecycle phase (default: 60).") var timeout = 60
+    @Option(name: .long, help: "Movie retention policy: failures, all, or none (default: failures).") var retainMovies = "failures"
 
     func run() async throws {
         guard (1...1_000).contains(iterations) else { throw ValidationError("--iterations must be between 1 and 1000.") }
         guard (1...600).contains(timeout) else { throw ValidationError("--timeout must be between 1 and 600 seconds.") }
+        guard ["failures", "all", "none"].contains(retainMovies) else {
+            throw ValidationError("--retain-movies must be failures, all, or none.")
+        }
         let appURL = URL(fileURLWithPath: (app as NSString).expandingTildeInPath).standardizedFileURL
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: appURL.path, isDirectory: &isDirectory), isDirectory.boolValue,
@@ -571,8 +576,45 @@ struct VerifyCommand: AsyncParsableCommand {
         }
         try await performVerification(
             appURL: appURL, bundleIdentifier: applicationBundleID,
-            iterations: iterations, output: output, timeout: timeout
+            iterations: iterations, output: output, timeout: timeout, retainMovies: retainMovies
         )
+    }
+}
+
+struct DoctorCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "doctor",
+        abstract: "Check whether this Mac can run AppStage GUI verification."
+    )
+
+    @Option(name: .long, help: "Path to the target .app bundle.") var app: String
+    @Flag(name: .long, help: "Print the full environment report as JSON.") var json = false
+    @Option(name: .long, help: "Write the full environment report to this JSON file.") var output: String?
+
+    func run() async throws {
+        let appURL = URL(fileURLWithPath: (app as NSString).expandingTildeInPath).standardizedFileURL
+        let outputURL = output.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath).standardizedFileURL }
+        let report = StageDoctor.inspect(appURL: appURL, outputURL: outputURL)
+        if let outputURL {
+            try FileManager.default.createDirectory(
+                at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try writeJSON(report, to: outputURL)
+        }
+        if json {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            let data = try encoder.encode(report)
+            print(String(decoding: data, as: UTF8.self))
+        } else {
+            print("AppStage doctor: \(report.passed ? "PASS" : "FAIL")")
+            for check in report.checks {
+                print("\(check.passed ? "PASS" : "FAIL")  \(check.name): \(check.detail)")
+            }
+            if let outputURL { print("Report: \(outputURL.path)") }
+        }
+        if !report.passed { throw ExitCode.failure }
     }
 }
 
@@ -582,7 +624,8 @@ private func performVerification(
     bundleIdentifier applicationBundleID: String,
     iterations: Int,
     output: String,
-    timeout: Int
+    timeout: Int,
+    retainMovies: String
 ) async throws {
         let root = URL(fileURLWithPath: (output as NSString).expandingTildeInPath).standardizedFileURL
         let formatter = DateFormatter()
@@ -593,7 +636,7 @@ private func performVerification(
         try FileManager.default.createDirectory(at: runDirectory, withIntermediateDirectories: true)
 
         let captureConfiguration = try StageCaptureConfiguration(
-            framing: .desktopAroundWindow(horizontalMargin: 220, verticalMargin: 120),
+            framing: .desktopAroundWindow(horizontalMargin: 100, verticalMargin: 50),
             includesApplicationWindows: true
         )
         let (discovery, token, sessionID) = try makeBatchRoundWorkflow(
@@ -607,17 +650,29 @@ private func performVerification(
                 timeout: .seconds(timeout), existingApplicationPolicy: .reject
             )
         } catch {
+            let setupFailure = error.localizedDescription
+            let summary = StageVerifySummary(
+                generatedAt: Date(), iterationsRequested: iterations, attemptsTotal: 0,
+                passed: 0, failed: 0, perScenario: [:], failureCountsByPhase: ["scenarioDiscovery": 1],
+                maxControlConnectDuration: nil, maxPrepareDuration: nil, maxFinalizeDuration: nil,
+                orphanProcessCount: 0, cleanupFailureCount: 0, determinismWarnings: [],
+                telemetryNotes: [
+                    "Condition IDs and AX element snapshots are unavailable in Control Protocol v3; no Host-side telemetry is inferred.",
+                    "NSWorkspace does not expose the launched GUI process exit code; process exit is verified, but the code is unavailable."
+                ], attempts: [], setupFailurePhase: "scenarioDiscovery", setupFailure: setupFailure
+            )
+            try writeJSON(summary, to: runDirectory.appendingPathComponent("summary.json"))
+            try summaryText(summary).write(to: runDirectory.appendingPathComponent("summary.txt"), atomically: true, encoding: .utf8)
             throw ValidationError("Scenario discovery failed: \(error.localizedDescription)")
         }
 
         var attempts: [StageVerifyAttempt] = []
-        var seenPIDs = Set<Int32>()
         var semanticSequences: [String: [String]] = [:]
-        for scenario in scenarios {
-            let scenarioName = scenario.id.rawValue.replacingOccurrences(of: "/", with: "-")
-            let scenarioDirectory = runDirectory.appendingPathComponent(scenarioName, isDirectory: true)
-            try FileManager.default.createDirectory(at: scenarioDirectory, withIntermediateDirectories: true)
-            for iteration in 1...iterations {
+        for iteration in 1...iterations {
+            for scenario in scenarios {
+                let scenarioName = scenario.id.rawValue.replacingOccurrences(of: "/", with: "-")
+                let scenarioDirectory = runDirectory.appendingPathComponent(scenarioName, isDirectory: true)
+                try FileManager.default.createDirectory(at: scenarioDirectory, withIntermediateDirectories: true)
                 let attemptDirectory = scenarioDirectory.appendingPathComponent(String(format: "attempt-%03d", iteration), isDirectory: true)
                 try FileManager.default.createDirectory(at: attemptDirectory, withIntermediateDirectories: true)
                 let movieURL = attemptDirectory.appendingPathComponent("recording.mov")
@@ -656,7 +711,6 @@ private func performVerification(
                     }
                 )
                 attempt.controlSessionID = attemptSessionID
-                var pidRecorded = false
                 func recorderCleanupVerified() -> Bool {
                     let recorderStarted = attempt.events.contains(where: {
                         $0.phase == StageRecordWorkflow.Phase.recordingStart.rawValue && $0.message == "recording started"
@@ -673,22 +727,17 @@ private func performVerification(
                         token: attemptToken, sessionID: attemptSessionID, timeout: .seconds(timeout),
                         existingApplicationPolicy: .reject, outputURL: movieURL
                     )
-                    guard let pid = attempt.pid else {
+                    guard attempt.pid != nil else {
                         latestPhase = .launch
                         throw StageVerifyError.invalidMovie("No child PID was recorded")
                     }
-                    if !seenPIDs.insert(pid).inserted {
-                        latestPhase = .processTermination
-                        throw StageVerifyError.invalidMovie("AppStage reused PID \(pid) across attempts")
-                    }
-                    pidRecorded = attempt.pid != nil
                     guard attempt.events.contains(where: { $0.phase == StageRecordWorkflow.Phase.processTermination.rawValue && $0.message == "child exited" }) else {
                         latestPhase = .processTermination
                         throw StageVerifyError.invalidMovie("Child process did not exit cleanly")
                     }
-                    guard attempt.processExitCode == 0 else {
+                    if let exitCode = attempt.processExitCode, exitCode != 0 {
                         latestPhase = .processTermination
-                        throw StageVerifyError.invalidMovie("Child process exit code was \(attempt.processExitCode.map { String($0) } ?? "unknown")")
+                        throw StageVerifyError.invalidMovie("Child process exit code was \(exitCode)")
                     }
                     latestPhase = .movieValidation
                     let movie = try await StageVerifyWorkflow.validateMovie(
@@ -716,13 +765,6 @@ private func performVerification(
                     let disconnected = attempt.events.contains(where: { $0.phase == StageRecordWorkflow.Phase.controlDisconnect.rawValue })
                     attempt.cleanupPassed = (attempt.pid == nil || attempt.processExitedCleanly)
                         && disconnected && recorderCleanupVerified()
-                    if let pid = attempt.pid, !pidRecorded {
-                        if !seenPIDs.insert(pid).inserted {
-                            attempt.failedPhase = StageRecordWorkflow.Phase.processTermination.rawValue
-                            attempt.error = "PID was reused across attempts"
-                        }
-                        pidRecorded = true
-                    }
                 }
                 attempt.finishedAt = Date()
                 attempt.totalDuration = attempt.finishedAt!.timeIntervalSince(attempt.startedAt)
@@ -736,6 +778,20 @@ private func performVerification(
                 try writeJSON(attempt.events, to: attemptDirectory.appendingPathComponent("trace.json"))
                 if attempt.status == "fail" {
                     try writeJSON(attempt, to: attemptDirectory.appendingPathComponent("diagnostics.json"))
+                }
+                let shouldRetainMovie = retainMovies == "all"
+                    || (retainMovies == "failures" && attempt.status == "fail")
+                if !shouldRetainMovie, FileManager.default.fileExists(atPath: movieURL.path) {
+                    do {
+                        try FileManager.default.removeItem(at: movieURL)
+                    } catch {
+                        attempt.status = "fail"
+                        attempt.failedPhase = StageRecordWorkflow.Phase.cleanup.rawValue
+                        attempt.error = "Could not remove unretained MOV: \(error.localizedDescription)"
+                        attempt.cleanupPassed = false
+                        try writeJSON(attempt, to: attemptDirectory.appendingPathComponent("result.json"))
+                        try writeJSON(attempt, to: attemptDirectory.appendingPathComponent("diagnostics.json"))
+                    }
                 }
                 attempts.append(attempt)
                 print("[\(scenario.id.rawValue) #\(iteration)] \(attempt.status.uppercased())\(attempt.failedPhase.map { " phase=\($0)" } ?? "")")
@@ -763,8 +819,10 @@ private func performVerification(
             orphanProcessCount: attempts.filter { $0.pid != nil && !$0.processExitedCleanly }.count,
             cleanupFailureCount: attempts.filter { !$0.cleanupPassed }.count,
             determinismWarnings: attempts.filter { $0.events.contains(where: { $0.phase == "determinismWarning" }) }.map { "\($0.scenarioID) #\($0.iteration)" },
-            telemetryNotes: ["Condition IDs and AX element snapshots are unavailable in Control Protocol v3; no Host-side telemetry is inferred."],
-            attempts: attempts
+            telemetryNotes: [
+                "Condition IDs and AX element snapshots are unavailable in Control Protocol v3; no Host-side telemetry is inferred.",
+                "NSWorkspace does not expose the launched GUI process exit code; process exit is verified, but the code is unavailable."
+            ], attempts: attempts, setupFailurePhase: nil, setupFailure: nil
         )
         try writeJSON(summary, to: runDirectory.appendingPathComponent("summary.json"))
         try summaryText(summary).write(to: runDirectory.appendingPathComponent("summary.txt"), atomically: true, encoding: .utf8)
@@ -780,13 +838,32 @@ private func writeJSON<T: Encodable>(_ value: T, to url: URL) throws {
 }
 
 private func summaryText(_ summary: StageVerifySummary) -> String {
-    var lines = ["AppStage Reliability Verification", "", "\(summary.attemptsTotal) attempts", "\(summary.passed) PASS", "\(summary.failed) FAIL", ""]
+    let finalizeFailures = summary.attempts.filter { $0.writerFinalizeState == "failed" }.count
+    let invalidMovies = summary.failureCountsByPhase[StageRecordWorkflow.Phase.movieValidation.rawValue] ?? 0
+    var lines = [
+        "AppStage Reliability Verification",
+        "",
+        "Scenarios: \(summary.perScenario.count)",
+        "Rounds: \(summary.iterationsRequested)",
+        "Attempts: \(summary.attemptsTotal)",
+        "PASS: \(summary.passed)",
+        "FAIL: \(summary.failed)",
+        "Invalid MOV: \(invalidMovies)",
+        "Recording finalize failures: \(finalizeFailures)",
+        "Max control connect: \(summary.maxControlConnectDuration.map { String(format: "%.3f s", $0) } ?? "n/a")",
+        "Max prepare: \(summary.maxPrepareDuration.map { String(format: "%.3f s", $0) } ?? "n/a")",
+        "Max finalize: \(summary.maxFinalizeDuration.map { String(format: "%.3f s", $0) } ?? "n/a")",
+        ""
+    ]
     for (scenario, result) in summary.perScenario.sorted(by: { $0.key < $1.key }) {
         lines.append("\(scenario): \(result.passed)/\(result.attempts) PASS (\(Int(result.passRate * 100))%)")
     }
     lines.append("")
     for attempt in summary.attempts where attempt.status == "fail" {
         lines += ["Failure:", "\(attempt.scenarioID) #\(attempt.iteration)", "phase: \(attempt.failedPhase ?? "unknown")", "reason: \(attempt.error ?? "unknown")", ""]
+    }
+    if let setupFailure = summary.setupFailure {
+        lines += ["Setup failure:", "phase: \(summary.setupFailurePhase ?? "unknown")", "reason: \(setupFailure)", ""]
     }
     lines += ["Orphan process: \(summary.orphanProcessCount)", "Cleanup failure: \(summary.cleanupFailureCount)"]
     lines += ["", "Telemetry gap: Control Protocol v3 does not expose Host condition IDs or AX snapshots."]

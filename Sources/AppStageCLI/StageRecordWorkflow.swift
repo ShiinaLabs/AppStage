@@ -18,13 +18,13 @@ protocol StageRecordSessioning {
     var processIdentifier: pid_t { get }
     var bundleIdentifier: String { get }
     var isTerminated: Bool { get }
-    var terminationStatus: Int32 { get }
+    var terminationStatus: Int32? { get }
     func finish() async
 }
 
 extension StageRecordSessioning {
     var isTerminated: Bool { false }
-    var terminationStatus: Int32 { 0 }
+    var terminationStatus: Int32? { nil }
 }
 
 @MainActor

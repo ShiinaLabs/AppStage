@@ -1,0 +1,123 @@
+name: AppStage GUI Reliability
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "25 19 * * *"
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: Complete Scenario rounds
+        type: choice
+        options: ["1", "3", "20"]
+        default: "20"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: appstage-gui
+  cancel-in-progress: false
+
+jobs:
+  fixture-reliability:
+    name: AppStage Reliability Smoke
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS, appstage-gui]
+    timeout-minutes: 90
+    env:
+      REPORT_ROOT: ${{ runner.temp }}/appstage-reliability
+      FIXTURE_APP: ${{ github.workspace }}/Fixtures/AppStageTestHost/build/Build/Products/Debug/AppStageTestHost.app
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Prevent runner sleep during GUI verification
+        run: |
+          nohup caffeinate -dimsu >/dev/null 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/appstage-caffeinate.pid"
+
+      - name: Build AppStage CLI
+        run: swift build --product appstage
+
+      - name: Build Fixture Host
+        run: |
+          arch="$(uname -m)"
+          xcodebuild \
+            -project Fixtures/AppStageTestHost/AppStageTestHost.xcodeproj \
+            -scheme AppStageTestHost \
+            -configuration Debug \
+            -destination "platform=macOS,arch=$arch" \
+            -derivedDataPath Fixtures/AppStageTestHost/build \
+            ARCHS="$arch" \
+            build
+
+      - name: Check GUI runner environment
+        id: doctor
+        run: .build/debug/appstage doctor --app "$FIXTURE_APP" --json --output "$REPORT_ROOT/environment.json"
+
+      - name: Choose iteration count
+        id: rounds
+        shell: bash
+        run: |
+          case "$GITHUB_EVENT_NAME" in
+            pull_request) rounds=1 ;;
+            push) rounds=3 ;;
+            schedule) rounds=20 ;;
+            workflow_dispatch) rounds="${{ inputs.iterations }}" ;;
+            *) rounds=1 ;;
+          esac
+          echo "count=$rounds" >> "$GITHUB_OUTPUT"
+
+      - name: Run Fixture Host reliability verification
+        id: verify
+        continue-on-error: true
+        run: |
+          set +e
+          .build/debug/appstage verify \
+            --app "$FIXTURE_APP" \
+            --iterations "${{ steps.rounds.outputs.count }}" \
+            --retain-movies failures \
+            --output "$REPORT_ROOT"
+          exit_code=$?
+          set -e
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          find "$REPORT_ROOT" -maxdepth 1 -type d -name 'run-*' -print | sort | tail -n 1 > "$REPORT_ROOT/latest-run.txt"
+
+      - name: Write GitHub job summary
+        if: always()
+        shell: bash
+        run: |
+          echo "## AppStage Reliability" >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f "$REPORT_ROOT/environment.json" ]]; then
+            doctor_status=$(python3 -c 'import json,sys; print("PASS" if all(c["passed"] for c in json.load(open(sys.argv[1]))["checks"]) else "FAIL")' "$REPORT_ROOT/environment.json")
+            echo "Environment: $doctor_status" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Environment: not completed" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -f "$REPORT_ROOT/latest-run.txt" ]]; then
+            run_dir=$(cat "$REPORT_ROOT/latest-run.txt")
+            [[ -f "$run_dir/summary.txt" ]] && cat "$run_dir/summary.txt" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload environment and verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appstage-reliability-${{ github.run_id }}
+          path: ${{ runner.temp }}/appstage-reliability
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Fail on verification regression
+        if: steps.verify.outcome == 'failure'
+        run: exit 1
+
+      - name: Stop runner sleep prevention
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/appstage-caffeinate.pid" ]]; then
+            kill "$(cat "$RUNNER_TEMP/appstage-caffeinate.pid")" 2>/dev/null || true
+          fi
