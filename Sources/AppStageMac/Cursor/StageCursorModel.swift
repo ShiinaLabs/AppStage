@@ -335,39 +335,15 @@ private final class StageCursorOverlayWindowController {
 
 }
 
-private struct StageCursorShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        let point = { (x: CGFloat, y: CGFloat) in
-            CGPoint(x: rect.minX + rect.width * x, y: rect.minY + rect.height * y)
-        }
-
-        var path = Path()
-        path.move(to: point(0, 0))
-        path.addLine(to: point(0, 0.78))
-        path.addQuadCurve(to: point(0.035, 0.80), control: point(0, 0.82))
-        path.addLine(to: point(0.28, 0.60))
-        path.addQuadCurve(to: point(0.34, 0.62), control: point(0.31, 0.58))
-        path.addLine(to: point(0.62, 0.97))
-        path.addQuadCurve(to: point(0.68, 1), control: point(0.66, 1))
-        path.addLine(to: point(0.82, 0.94))
-        path.addQuadCurve(to: point(0.85, 0.88), control: point(0.87, 0.92))
-        path.addLine(to: point(0.61, 0.61))
-        path.addLine(to: point(0.91, 0.61))
-        path.addQuadCurve(to: point(0.95, 0.56), control: point(0.97, 0.61))
-        path.addLine(to: point(0.02, 0.02))
-        path.closeSubpath()
-        return path
-    }
-}
-
 private struct StageCursorOverlay: View {
     @Bindable var model: StageCursorModel
     @State private var clickRippleVisible = false
     @State private var clickRippleProgress = 0.0
     @State private var clickRippleTask: Task<Void, Never>?
 
-    private let cursorWidth: CGFloat = 22
-    private let cursorHeight: CGFloat = 32
+    private let nativeCursor = NSCursor.arrow
+    private var cursorWidth: CGFloat { nativeCursor.image.size.width - nativeCursor.hotSpot.x }
+    private var cursorHeight: CGFloat { nativeCursor.image.size.height - nativeCursor.hotSpot.y }
     private let rippleDiameter: CGFloat = 30
 
     var body: some View {
@@ -412,14 +388,17 @@ private struct StageCursorOverlay: View {
     }
 
     private var cursorBody: some View {
-        StageCursorShape()
-            .fill(.black)
-            .overlay {
-                StageCursorShape()
-                    .stroke(.white, style: StrokeStyle(lineWidth: 1.6, lineJoin: .round))
-            }
-            .frame(width: cursorWidth, height: cursorHeight)
-            .scaleEffect(model.isMouseDown ? 0.95 : 1, anchor: .topLeading)
+        let image = nativeCursor.image
+        let hotspot = nativeCursor.hotSpot
+        let size = image.size
+        return Image(nsImage: image)
+            .renderingMode(.original)
+            .frame(width: size.width, height: size.height)
+            .scaleEffect(
+                model.isMouseDown ? 0.95 : 1,
+                anchor: UnitPoint(x: hotspot.x / size.width, y: hotspot.y / size.height)
+            )
+            .offset(x: -hotspot.x, y: -hotspot.y)
             .animation(.easeOut(duration: 0.08), value: model.isMouseDown)
     }
 
