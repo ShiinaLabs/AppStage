@@ -115,11 +115,14 @@ Transparent MOVs are intended for compositing in a video editor: place the
 background on a lower video track and the AppStage recording above it. The
 recording retains the captured app window and its transparent framing area;
 `verify --transparent-background` confirms alpha data is present. Do not use
-chroma-key or luma-key effects for this output. In DaVinci Resolve, if the
-background does not show through automatically, inspect the clip's **Clip
-Attributes → Alpha Mode** and confirm the correct interpretation against a
-high-contrast background before exporting. The correct Resolve mode must be
-visually confirmed for the installed Resolve version and the imported clip.
+chroma-key or luma-key effects for this output.
+
+On DaVinci Resolve 21.0.3.7, the imported ProRes 4444 clip is correctly
+interpreted with **Clip Attributes → Alpha Mode → Straight**. This was visually
+verified at multiple points in the recording over a magenta/cyan background:
+the background shows through around the app window while its rounded corners,
+shadow, and cursor remain intact. For other Resolve versions, check the imported
+clip over a high-contrast background before delivery.
 
 ## Manifest and failures
 
