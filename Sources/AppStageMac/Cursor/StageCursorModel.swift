@@ -343,14 +343,18 @@ private struct StageCursorShape: Shape {
 
         var path = Path()
         path.move(to: point(0, 0))
-        path.addLines([
-            point(0, 1),
-            point(0.30, 0.72),
-            point(0.46, 1),
-            point(0.64, 0.90),
-            point(0.48, 0.62),
-            point(0.82, 0.62),
-        ])
+        path.addLine(to: point(0, 0.78))
+        path.addQuadCurve(to: point(0.035, 0.80), control: point(0, 0.82))
+        path.addLine(to: point(0.28, 0.60))
+        path.addQuadCurve(to: point(0.34, 0.62), control: point(0.31, 0.58))
+        path.addLine(to: point(0.62, 0.97))
+        path.addQuadCurve(to: point(0.68, 1), control: point(0.66, 1))
+        path.addLine(to: point(0.82, 0.94))
+        path.addQuadCurve(to: point(0.85, 0.88), control: point(0.87, 0.92))
+        path.addLine(to: point(0.61, 0.61))
+        path.addLine(to: point(0.91, 0.61))
+        path.addQuadCurve(to: point(0.95, 0.56), control: point(0.97, 0.61))
+        path.addLine(to: point(0.02, 0.02))
         path.closeSubpath()
         return path
     }
@@ -363,7 +367,7 @@ private struct StageCursorOverlay: View {
     @State private var clickRippleTask: Task<Void, Never>?
 
     private let cursorWidth: CGFloat = 22
-    private let cursorHeight: CGFloat = 30
+    private let cursorHeight: CGFloat = 32
     private let rippleDiameter: CGFloat = 30
 
     var body: some View {
@@ -412,9 +416,8 @@ private struct StageCursorOverlay: View {
             .fill(.black)
             .overlay {
                 StageCursorShape()
-                    .stroke(.white, lineWidth: 1.6)
+                    .stroke(.white, style: StrokeStyle(lineWidth: 1.6, lineJoin: .round))
             }
-            .shadow(color: .black.opacity(0.35), radius: 1, x: 0.5, y: 1)
             .frame(width: cursorWidth, height: cursorHeight)
             .scaleEffect(model.isMouseDown ? 0.95 : 1, anchor: .topLeading)
             .animation(.easeOut(duration: 0.08), value: model.isMouseDown)
