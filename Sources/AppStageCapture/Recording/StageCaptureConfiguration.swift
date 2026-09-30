@@ -28,11 +28,17 @@ public enum StageCaptureCursor: Equatable, Sendable {
     case visible
 }
 
+public enum StageVideoOutputMode: String, Codable, Equatable, Sendable {
+    case h264
+    case proRes4444Alpha
+}
+
 public enum StageCaptureConfigurationError: Error, Equatable {
     case invalidFrameRate
     case invalidResolution
     case invalidFraming
     case canvasResolutionMismatch
+    case transparentOutputCannotUseCanvas
 }
 
 public struct StageCaptureConfiguration: Equatable, Sendable {
@@ -42,6 +48,7 @@ public struct StageCaptureConfiguration: Equatable, Sendable {
     public let framing: StageCaptureFraming
     public let includesApplicationWindows: Bool
     public let canvas: StageCanvasConfiguration?
+    public let videoOutputMode: StageVideoOutputMode
 
     public init(
         resolution: StageCaptureResolution? = nil,
@@ -49,7 +56,8 @@ public struct StageCaptureConfiguration: Equatable, Sendable {
         cursor: StageCaptureCursor = .hidden,
         framing: StageCaptureFraming,
         includesApplicationWindows: Bool = false,
-        canvas: StageCanvasConfiguration? = nil
+        canvas: StageCanvasConfiguration? = nil,
+        videoOutputMode: StageVideoOutputMode = .h264
     ) throws {
         guard (1...240).contains(frameRate) else {
             throw StageCaptureConfigurationError.invalidFrameRate
@@ -68,6 +76,9 @@ public struct StageCaptureConfiguration: Equatable, Sendable {
            (dimensions.width != canvas.pixelWidth || dimensions.height != canvas.pixelHeight) {
             throw StageCaptureConfigurationError.canvasResolutionMismatch
         }
+        if videoOutputMode == .proRes4444Alpha, canvas != nil {
+            throw StageCaptureConfigurationError.transparentOutputCannotUseCanvas
+        }
 
         switch framing {
         case let .desktopAroundWindow(horizontalMargin, verticalMargin):
@@ -84,5 +95,6 @@ public struct StageCaptureConfiguration: Equatable, Sendable {
         self.framing = framing
         self.includesApplicationWindows = includesApplicationWindows
         self.canvas = canvas
+        self.videoOutputMode = videoOutputMode
     }
 }

@@ -1,5 +1,6 @@
 import CoreGraphics
 import CoreVideo
+import AVFoundation
 import Foundation
 import ScreenCaptureKit
 import XCTest
@@ -181,11 +182,33 @@ final class AppStageCaptureTests: XCTestCase {
         XCTAssertEqual(configuration.frameRate, 60)
         XCTAssertEqual(configuration.cursor, .hidden)
         XCTAssertFalse(configuration.includesApplicationWindows)
+        XCTAssertEqual(configuration.videoOutputMode, .h264)
         let controlledConfiguration = try StageCaptureConfiguration(
             framing: .desktopAroundWindow(horizontalMargin: 220, verticalMargin: 120),
             includesApplicationWindows: true
         )
         XCTAssertTrue(controlledConfiguration.includesApplicationWindows)
+    }
+
+    func testTransparentRecordingConfigurationSelectsProRes4444AlphaAndRejectsCanvas() throws {
+        let configuration = try StageCaptureConfiguration(
+            framing: .desktopAroundWindow(horizontalMargin: 100, verticalMargin: 50),
+            videoOutputMode: .proRes4444Alpha
+        )
+        XCTAssertEqual(configuration.videoOutputMode, .proRes4444Alpha)
+        XCTAssertEqual(StageVideoRecorder.writerCodec(for: configuration.videoOutputMode), .proRes4444)
+
+        let backgroundURL = try makePNG(width: 640, height: 360, red: 0.2, green: 0.3, blue: 0.4)
+        defer { try? FileManager.default.removeItem(at: backgroundURL.deletingLastPathComponent()) }
+        let canvas = try StageCanvasConfiguration(backgroundImageURL: backgroundURL)
+        XCTAssertThrowsError(try StageCaptureConfiguration(
+            framing: .desktopAroundWindow(horizontalMargin: 100, verticalMargin: 50),
+            canvas: canvas,
+            videoOutputMode: .proRes4444Alpha
+        )) {
+            XCTAssertEqual($0 as? StageCaptureConfigurationError, .transparentOutputCannotUseCanvas)
+        }
+        XCTAssertEqual(StageVideoRecorder.writerCodec(for: .h264), AVVideoCodecType.h264)
     }
 
     func testRecordingConfigurationRejectsInvalidFrameRatesAndVideoDimensions() {

@@ -277,6 +277,9 @@ struct RecordCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Background image used as the final video canvas.")
     var backgroundImage: String?
 
+    @Flag(name: .long, help: "Preserve transparency and encode a ProRes 4444 MOV.")
+    var transparentBackground = false
+
     @Option(name: .long, help: "Horizontal desktop margin in points.")
     var horizontalMargin: Double = 220
 
@@ -293,6 +296,9 @@ struct RecordCommand: AsyncParsableCommand {
     var replaceExisting = false
 
     func run() async throws {
+        if transparentBackground, backgroundImage != nil {
+            throw ValidationError("--transparent-background cannot be used with --background-image.")
+        }
         guard (1...600).contains(duration) else {
             throw ValidationError("--duration must be between 1 and 600 seconds.")
         }
@@ -352,7 +358,8 @@ struct RecordCommand: AsyncParsableCommand {
                 verticalMargin: CGFloat(verticalMargin)
             ),
             includesApplicationWindows: true,
-            canvas: canvas
+            canvas: canvas,
+            videoOutputMode: transparentBackground ? .proRes4444Alpha : .h264
         )
 
         let captureTask = Task { @MainActor in
@@ -426,6 +433,9 @@ struct CaptureAllCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Background image used as the final video canvas.")
     var backgroundImage: String?
 
+    @Flag(name: .long, help: "Preserve transparency and encode ProRes 4444 MOVs.")
+    var transparentBackground = false
+
     @Option(name: .long, help: "Timeout in seconds for handshake, preparation, and each scenario (default: 30).")
     var timeout: Int = 30
 
@@ -442,6 +452,9 @@ struct CaptureAllCommand: AsyncParsableCommand {
     var replaceExisting = false
 
     func run() async throws {
+        if transparentBackground, backgroundImage != nil {
+            throw ValidationError("--transparent-background cannot be used with --background-image.")
+        }
         guard (1...600).contains(timeout) else {
             throw ValidationError("--timeout must be between 1 and 600 seconds.")
         }
@@ -488,7 +501,8 @@ struct CaptureAllCommand: AsyncParsableCommand {
                     verticalMargin: CGFloat(verticalMargin)
                 ),
                 includesApplicationWindows: true,
-                canvas: canvas
+                canvas: canvas,
+                videoOutputMode: transparentBackground ? .proRes4444Alpha : .h264
             )
         } catch {
             throw ValidationError("Invalid capture configuration: \(error.localizedDescription)")
@@ -558,6 +572,7 @@ struct VerifyCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Root output directory for this verification run.") var output: String = "~/Desktop/AppStage-Verify"
     @Option(name: .long, help: "Timeout in seconds per Control/lifecycle phase (default: 60).") var timeout = 60
     @Option(name: .long, help: "Movie retention policy: failures, all, or none (default: failures).") var retainMovies = "failures"
+    @Flag(name: .long, help: "Preserve transparency and encode ProRes 4444 MOVs.") var transparentBackground = false
 
     func run() async throws {
         guard (1...1_000).contains(iterations) else { throw ValidationError("--iterations must be between 1 and 1000.") }
@@ -576,7 +591,8 @@ struct VerifyCommand: AsyncParsableCommand {
         }
         try await performVerification(
             appURL: appURL, bundleIdentifier: applicationBundleID,
-            iterations: iterations, output: output, timeout: timeout, retainMovies: retainMovies
+            iterations: iterations, output: output, timeout: timeout, retainMovies: retainMovies,
+            videoOutputMode: transparentBackground ? .proRes4444Alpha : .h264
         )
     }
 }
@@ -627,7 +643,8 @@ private func performVerification(
     iterations: Int,
     output: String,
     timeout: Int,
-    retainMovies: String
+    retainMovies: String,
+    videoOutputMode: StageVideoOutputMode
 ) async throws {
         let root = URL(fileURLWithPath: (output as NSString).expandingTildeInPath).standardizedFileURL
         let formatter = DateFormatter()
@@ -639,7 +656,8 @@ private func performVerification(
 
         let captureConfiguration = try StageCaptureConfiguration(
             framing: .desktopAroundWindow(horizontalMargin: 100, verticalMargin: 50),
-            includesApplicationWindows: true
+            includesApplicationWindows: true,
+            videoOutputMode: videoOutputMode
         )
         let (discovery, token, sessionID) = try makeBatchRoundWorkflow(
             appURL: appURL, bundleIdentifier: applicationBundleID,
@@ -678,7 +696,12 @@ private func performVerification(
                 let attemptDirectory = scenarioDirectory.appendingPathComponent(String(format: "attempt-%03d", iteration), isDirectory: true)
                 try FileManager.default.createDirectory(at: attemptDirectory, withIntermediateDirectories: true)
                 let movieURL = attemptDirectory.appendingPathComponent("recording.mov")
-                var attempt = StageVerifyAttempt(scenarioID: scenario.id.rawValue, iteration: iteration, startedAt: Date())
+                var attempt = StageVerifyAttempt(
+                    scenarioID: scenario.id.rawValue,
+                    iteration: iteration,
+                    startedAt: Date(),
+                    videoOutputMode: videoOutputMode
+                )
                 var latestPhase = StageRecordWorkflow.Phase.launch
                 let (workflow, attemptToken, attemptSessionID) = try makeBatchRoundWorkflow(
                     appURL: appURL, bundleIdentifier: applicationBundleID,
@@ -743,7 +766,9 @@ private func performVerification(
                     }
                     latestPhase = .movieValidation
                     let movie = try await StageVerifyWorkflow.validateMovie(
-                        at: movieURL, expectedDurationMilliseconds: scenario.durationMilliseconds
+                        at: movieURL,
+                        expectedDurationMilliseconds: scenario.durationMilliseconds,
+                        requiresAlpha: videoOutputMode == .proRes4444Alpha
                     )
                     attempt.frameCount = movie.frames
                     attempt.firstFrameTimestamp = movie.firstPTS
@@ -752,6 +777,8 @@ private func performVerification(
                     attempt.videoWidth = movie.width
                     attempt.videoHeight = movie.height
                     attempt.fileSize = movie.size
+                    attempt.alphaContainsTransparency = movie.alphaContainsTransparency
+                    attempt.alphaContainsOpaquePixels = movie.alphaContainsOpaquePixels
                     attempt.status = "pass"
                     attempt.cleanupPassed = attempt.processExitedCleanly
                         && attempt.events.contains(where: { $0.phase == StageRecordWorkflow.Phase.controlDisconnect.rawValue })

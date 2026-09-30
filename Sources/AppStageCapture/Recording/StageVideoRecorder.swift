@@ -106,7 +106,9 @@ public actor StageVideoRecorder {
         streamConfiguration.showsCursor = configuration.cursor == .visible
         streamConfiguration.minimumFrameInterval = CMTime(value: 1, timescale: Int32(configuration.frameRate))
         streamConfiguration.queueDepth = 8
-        if configuration.canvas != nil {
+        let requiresAlphaFrames = configuration.canvas != nil
+            || configuration.videoOutputMode == .proRes4444Alpha
+        if requiresAlphaFrames {
             streamConfiguration.pixelFormat = kCVPixelFormatType_32BGRA
             streamConfiguration.backgroundColor = Self.clearBackgroundColor
         } else {
@@ -125,7 +127,7 @@ public actor StageVideoRecorder {
         let writerInput = AVAssetWriterInput(
             mediaType: .video,
             outputSettings: [
-                AVVideoCodecKey: AVVideoCodecType.h264,
+                AVVideoCodecKey: Self.writerCodec(for: configuration.videoOutputMode),
                 AVVideoWidthKey: dimensions.width,
                 AVVideoHeightKey: dimensions.height,
             ]
@@ -136,7 +138,7 @@ public actor StageVideoRecorder {
         }
         assetWriter.add(writerInput)
         let pixelBufferAdaptor: AVAssetWriterInputPixelBufferAdaptor?
-        if configuration.canvas != nil {
+        if requiresAlphaFrames {
             pixelBufferAdaptor = AVAssetWriterInputPixelBufferAdaptor(
                 assetWriterInput: writerInput,
                 sourcePixelBufferAttributes: [
@@ -162,6 +164,9 @@ public actor StageVideoRecorder {
             input: writerInput,
             pixelBufferAdaptor: pixelBufferAdaptor,
             frameCompositor: frameCompositor,
+            videoOutputMode: configuration.videoOutputMode,
+            frameWidth: dimensions.width,
+            frameHeight: dimensions.height,
             frameReadiness: readiness,
             failureSignal: failureSignal
         )
@@ -304,6 +309,13 @@ public actor StageVideoRecorder {
 
     private static let backgroundColor = CGColor(gray: 0, alpha: 1)
     private static let clearBackgroundColor = CGColor(gray: 0, alpha: 0)
+
+    static func writerCodec(for mode: StageVideoOutputMode) -> AVVideoCodecType {
+        switch mode {
+        case .h264: .h264
+        case .proRes4444Alpha: .proRes4444
+        }
+    }
 }
 
 private final class StageVideoSampleWriter: NSObject, SCStreamOutput, @unchecked Sendable {
@@ -318,6 +330,9 @@ private final class StageVideoSampleWriter: NSObject, SCStreamOutput, @unchecked
     private let input: AVAssetWriterInput
     private let pixelBufferAdaptor: AVAssetWriterInputPixelBufferAdaptor?
     private let frameCompositor: StageFrameCompositor?
+    private let videoOutputMode: StageVideoOutputMode
+    private let frameWidth: Int
+    private let frameHeight: Int
     private let frameReadiness: StageVideoFrameReadiness
     private let failureSignal: StageVideoRecorderFailureSignal
     private var didStartSession = false
@@ -330,6 +345,9 @@ private final class StageVideoSampleWriter: NSObject, SCStreamOutput, @unchecked
         input: AVAssetWriterInput,
         pixelBufferAdaptor: AVAssetWriterInputPixelBufferAdaptor?,
         frameCompositor: StageFrameCompositor?,
+        videoOutputMode: StageVideoOutputMode,
+        frameWidth: Int,
+        frameHeight: Int,
         frameReadiness: StageVideoFrameReadiness,
         failureSignal: StageVideoRecorderFailureSignal
     ) {
@@ -337,6 +355,9 @@ private final class StageVideoSampleWriter: NSObject, SCStreamOutput, @unchecked
         self.input = input
         self.pixelBufferAdaptor = pixelBufferAdaptor
         self.frameCompositor = frameCompositor
+        self.videoOutputMode = videoOutputMode
+        self.frameWidth = frameWidth
+        self.frameHeight = frameHeight
         self.frameReadiness = frameReadiness
         self.failureSignal = failureSignal
     }
@@ -420,6 +441,16 @@ private final class StageVideoSampleWriter: NSObject, SCStreamOutput, @unchecked
                 } catch {
                     return failLocked(error.localizedDescription)
                 }
+            } else if videoOutputMode == .proRes4444Alpha,
+                      let pixelBufferAdaptor,
+                      let sourceBuffer {
+                guard CVPixelBufferGetPixelFormatType(sourceBuffer) == kCVPixelFormatType_32BGRA,
+                      CVPixelBufferGetWidth(sourceBuffer) == frameWidth,
+                      CVPixelBufferGetHeight(sourceBuffer) == frameHeight
+                else {
+                    return failLocked("Transparent capture did not provide a matching BGRA frame.")
+                }
+                didAppend = pixelBufferAdaptor.append(sourceBuffer, withPresentationTime: presentationTime)
             } else {
                 didAppend = input.append(sampleBuffer)
             }

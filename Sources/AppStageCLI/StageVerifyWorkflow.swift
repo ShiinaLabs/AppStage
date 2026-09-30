@@ -1,5 +1,6 @@
 import AVFoundation
 import AppStage
+import AppStageCapture
 import CoreVideo
 import Foundation
 
@@ -37,6 +38,9 @@ struct StageVerifyAttempt: Codable {
     var videoWidth: Double?
     var videoHeight: Double?
     var fileSize: Int64?
+    var videoOutputMode: String
+    var alphaContainsTransparency: Bool?
+    var alphaContainsOpaquePixels: Bool?
     var writerFinalizeState: String = "notStarted"
     var conditionResults: [[String: String]] = []
     var axInteractions: [[String: String]] = []
@@ -45,10 +49,11 @@ struct StageVerifyAttempt: Codable {
     var error: String?
     var events: [StageVerifyEvent] = []
 
-    init(scenarioID: String, iteration: Int, startedAt: Date) {
+    init(scenarioID: String, iteration: Int, startedAt: Date, videoOutputMode: StageVideoOutputMode = .h264) {
         self.scenarioID = scenarioID
         self.iteration = iteration
         self.startedAt = startedAt
+        self.videoOutputMode = videoOutputMode.rawValue
     }
 }
 
@@ -87,7 +92,15 @@ struct StageVerifySummary: Codable {
 }
 
 enum StageVerifyWorkflow {
-    static func validateMovie(at url: URL, expectedDurationMilliseconds: Int64?) async throws -> (frames: Int, firstPTS: Double, lastPTS: Double, duration: Double, width: Double, height: Double, size: Int64) {
+    static func validateMovie(
+        at url: URL,
+        expectedDurationMilliseconds: Int64?,
+        requiresAlpha: Bool = false
+    ) async throws -> (
+        frames: Int, firstPTS: Double, lastPTS: Double, duration: Double,
+        width: Double, height: Double, size: Int64,
+        alphaContainsTransparency: Bool?, alphaContainsOpaquePixels: Bool?
+    ) {
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
         guard size >= 1_024 else { throw StageVerifyError.invalidMovie("MOV is missing or smaller than 1 KiB") }
@@ -128,6 +141,8 @@ enum StageVerifyWorkflow {
         var sampleDimensions: CGSize?
         var firstPTS: Double?
         var lastPTS: Double?
+        var foundTransparentPixel = false
+        var foundVisiblePixel = false
         while let sample = output.copyNextSampleBuffer() {
             let time = CMSampleBufferGetPresentationTimeStamp(sample)
             guard time.isValid, time.seconds.isFinite else {
@@ -150,6 +165,28 @@ enum StageVerifyWorkflow {
                 }
                 sampleDimensions = size
             }
+            if requiresAlpha, let imageBuffer = CMSampleBufferGetImageBuffer(sample) {
+                CVPixelBufferLockBaseAddress(imageBuffer, .readOnly)
+                defer { CVPixelBufferUnlockBaseAddress(imageBuffer, .readOnly) }
+                guard CVPixelBufferGetPixelFormatType(imageBuffer) == kCVPixelFormatType_32BGRA,
+                      let baseAddress = CVPixelBufferGetBaseAddress(imageBuffer)
+                else {
+                    throw StageVerifyError.invalidMovie("Transparent MOV could not be decoded as BGRA")
+                }
+                let bytesPerRow = CVPixelBufferGetBytesPerRow(imageBuffer)
+                let width = CVPixelBufferGetWidth(imageBuffer)
+                let height = CVPixelBufferGetHeight(imageBuffer)
+                let bytes = baseAddress.assumingMemoryBound(to: UInt8.self)
+                for y in 0..<height where !foundTransparentPixel || !foundVisiblePixel {
+                    let row = bytes.advanced(by: y * bytesPerRow)
+                    for x in 0..<width {
+                        let alpha = row[x * 4 + 3]
+                        if alpha < 255 { foundTransparentPixel = true }
+                        if alpha > 0 { foundVisiblePixel = true }
+                        if foundTransparentPixel && foundVisiblePixel { break }
+                    }
+                }
+            }
             frames += 1
         }
         guard reader.status == .completed, frames >= 2 else {
@@ -158,7 +195,18 @@ enum StageVerifyWorkflow {
         guard let firstPTS, let lastPTS else {
             throw StageVerifyError.invalidMovie("MOV contains no timestamped video frames")
         }
-        return (frames, firstPTS, lastPTS, duration, Double(naturalSize.width), Double(naturalSize.height), size)
+        if requiresAlpha {
+            guard foundTransparentPixel, foundVisiblePixel else {
+                throw StageVerifyError.invalidMovie(
+                    "ProRes 4444 MOV must contain both transparent pixels and visible pixels"
+                )
+            }
+        }
+        return (
+            frames, firstPTS, lastPTS, duration, Double(naturalSize.width), Double(naturalSize.height), size,
+            requiresAlpha ? foundTransparentPixel : nil,
+            requiresAlpha ? foundVisiblePixel : nil
+        )
     }
 }
 

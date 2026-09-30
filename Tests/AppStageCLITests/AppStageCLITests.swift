@@ -29,6 +29,7 @@ final class AppStageCLITests: XCTestCase {
         XCTAssertTrue(result.standardOutput.contains("--scenario"))
         XCTAssertTrue(result.standardOutput.contains("--output"))
         XCTAssertTrue(result.standardOutput.contains("--background-image"))
+        XCTAssertTrue(result.standardOutput.contains("--transparent-background"))
         XCTAssertTrue(result.standardOutput.contains("--duration"))
     }
 
@@ -74,6 +75,30 @@ final class AppStageCLITests: XCTestCase {
         ])
 
         XCTAssertEqual(command.backgroundImage, "/tmp/background.png")
+    }
+
+    func testTransparentBackgroundAndBackgroundImageAreRejectedTogether() throws {
+        let result = try runCLI([
+            "record",
+            "--app", "/does/not/need/to/exist.app",
+            "--scenario", "example",
+            "--output", "/tmp/example.mov",
+            "--background-image", "/tmp/background.png",
+            "--transparent-background",
+        ])
+        XCTAssertNotEqual(result.status, 0)
+        XCTAssertTrue(result.standardError.contains(
+            "--transparent-background cannot be used with --background-image."
+        ))
+    }
+
+    func testCaptureAllParsesTransparentBackground() throws {
+        let command = try CaptureAllCommand.parse([
+            "--app", "/Applications/Example.app",
+            "--output-dir", "/tmp/captures",
+            "--transparent-background",
+        ])
+        XCTAssertTrue(command.transparentBackground)
     }
 
     func testCaptureAllParsesBatchOptionsWithoutSingleScenarioArguments() throws {

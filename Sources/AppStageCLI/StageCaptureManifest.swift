@@ -25,9 +25,10 @@ struct StageCaptureManifest: Codable, Equatable, Sendable {
         let horizontalMargin: Double
         let verticalMargin: Double
         let backgroundImage: String?
+        let videoOutputMode: StageVideoOutputMode
 
         private enum CodingKeys: String, CodingKey {
-            case frameRate, width, height, horizontalMargin, verticalMargin, backgroundImage
+            case frameRate, width, height, horizontalMargin, verticalMargin, backgroundImage, videoOutputMode
         }
 
         func encode(to encoder: Encoder) throws {
@@ -37,6 +38,7 @@ struct StageCaptureManifest: Codable, Equatable, Sendable {
             try container.encode(height, forKey: .height)
             try container.encode(horizontalMargin, forKey: .horizontalMargin)
             try container.encode(verticalMargin, forKey: .verticalMargin)
+            try container.encode(videoOutputMode.rawValue, forKey: .videoOutputMode)
             if let backgroundImage {
                 try container.encode(backgroundImage, forKey: .backgroundImage)
             } else {
@@ -118,7 +120,8 @@ struct StageCaptureManifest: Codable, Equatable, Sendable {
             height: Int(size.height),
             horizontalMargin: horizontalMargin,
             verticalMargin: verticalMargin,
-            backgroundImage: captureConfiguration.canvas?.backgroundImageURL.standardizedFileURL.path
+            backgroundImage: captureConfiguration.canvas?.backgroundImageURL.standardizedFileURL.path,
+            videoOutputMode: captureConfiguration.videoOutputMode
         )
         self.scenarios = scenarios
     }
