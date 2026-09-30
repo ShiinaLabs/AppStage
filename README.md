@@ -28,7 +28,8 @@ appstage capture-all --app "/Applications/Example.app" \
   --output-dir ./Artifacts/batch
 
 appstage verify --app "/Applications/Example.app" \
-  --iterations 20 --output ~/Desktop/AppStage-Verify
+  --iterations 1 --retain-movies failures \
+  --output ~/Desktop/AppStage-Verify
 ```
 
 ## Documentation
@@ -36,7 +37,7 @@ appstage verify --app "/Applications/Example.app" \
 - [Getting started](docs/getting-started.md)
 - [Designing scenarios](docs/scenarios.md)
 - [Capture commands and output](docs/capture.md)
-- [Reliability CI](docs/reliability-ci.md)
+- [AppStage Reliability Validation](docs/reliability.md)
 
 ## Requirements
 

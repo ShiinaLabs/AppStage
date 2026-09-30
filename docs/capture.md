@@ -59,10 +59,14 @@ Control Protocol v3 does not report Host-internal condition IDs or detailed AX
 snapshots. The current report marks those telemetry sources unavailable rather
 than inferring them from video or treating a successful command as evidence.
 
-`appstage doctor --app "/Applications/Example.app" --json \
-  --output ./Artifacts/environment.json` checks the GUI session, macOS version,
-Accessibility and Screen Recording permissions, display, target bundle, stale
-target processes, available disk space, Xcode, and Swift before a GUI run.
+Before a local reliability run, use `doctor` to check the GUI session, macOS
+version, Accessibility and Screen Recording permissions, display, target
+bundle, stale target processes, available disk space, Xcode, and Swift:
+
+```sh
+appstage doctor --app "/Applications/Example.app" --json \
+  --output ./Artifacts/environment.json
+```
 
 Each Scenario starts with its ID in `--appstage-scenario`, so the Host can choose
 its initial route and state at launch. The Host does not need runtime navigation
