@@ -335,53 +335,50 @@ private final class StageCursorOverlayWindowController {
 
 }
 
+private struct StageCursorShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let point = { (x: CGFloat, y: CGFloat) in
+            CGPoint(x: rect.minX + rect.width * x, y: rect.minY + rect.height * y)
+        }
+
+        var path = Path()
+        path.move(to: point(0, 0))
+        path.addLines([
+            point(0, 1),
+            point(0.30, 0.72),
+            point(0.46, 1),
+            point(0.64, 0.90),
+            point(0.48, 0.62),
+            point(0.82, 0.62),
+        ])
+        path.closeSubpath()
+        return path
+    }
+}
+
 private struct StageCursorOverlay: View {
     @Bindable var model: StageCursorModel
     @State private var clickRippleVisible = false
     @State private var clickRippleProgress = 0.0
     @State private var clickRippleTask: Task<Void, Never>?
 
+    private let cursorWidth: CGFloat = 22
+    private let cursorHeight: CGFloat = 30
+    private let rippleDiameter: CGFloat = 30
+
     var body: some View {
         ZStack(alignment: .topLeading) {
-            ZStack {
-                if clickRippleVisible {
-                    Circle()
-                        .stroke(.white.opacity(0.2), lineWidth: 1)
-                        .frame(width: 22, height: 22)
-                        .scaleEffect(0.55 + clickRippleProgress * 0.95)
-                        .opacity(0.38 * (1 - clickRippleProgress))
-                }
-                Image(systemName: "arrow.up.left")
-                    .font(.system(size: 23, weight: .regular))
-                    .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.78), radius: 2, x: 1, y: 1)
-                    .scaleEffect(model.isMouseDown ? 0.93 : 1)
-                if model.isScrolling {
-                    let travel = CGFloat(min(abs(model.scrollDistance), 24) * model.scrollProgress)
-                    let verticalTravel = model.scrollDirection == .down ? travel : -travel
-                    Image(systemName: model.scrollDirection == .up ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.55))
-                        .offset(x: 17, y: 20 + verticalTravel)
-                }
-                if !model.typedText.isEmpty {
-                    Text(model.typedText)
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .lineLimit(1)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 5)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
-                        .offset(x: 25, y: -20)
-                }
+            ZStack(alignment: .topLeading) {
+                clickRipple
+                cursorBody
+                scrollIndicator
+                typedTextBadge
             }
-            .frame(width: 48, height: 48)
-            .scaleEffect(model.isMouseDown ? 0.98 : 1)
-            .offset(x: model.position.x - 24, y: model.position.y - 24)
+            .offset(x: model.position.x, y: model.position.y)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .opacity(model.opacity)
         .animation(.easeInOut(duration: seconds(model.opacityTransitionDuration)), value: model.opacity)
-        .animation(.easeOut(duration: 0.08), value: model.isMouseDown)
         .onChange(of: model.clickFeedbackID) { _, _ in
             clickRippleTask?.cancel()
             clickRippleVisible = true
@@ -394,6 +391,57 @@ private struct StageCursorOverlay: View {
                 guard !Task.isCancelled else { return }
                 clickRippleVisible = false
             }
+        }
+    }
+
+    private var clickRipple: some View {
+        Group {
+            if clickRippleVisible {
+                Circle()
+                    .stroke(.white.opacity(0.32), lineWidth: 1.2)
+                    .frame(width: rippleDiameter, height: rippleDiameter)
+                    .scaleEffect(0.4 + clickRippleProgress * 0.6)
+                    .opacity(0.35 * (1 - clickRippleProgress))
+                    .offset(x: -rippleDiameter / 2, y: -rippleDiameter / 2)
+            }
+        }
+    }
+
+    private var cursorBody: some View {
+        StageCursorShape()
+            .fill(.black)
+            .overlay {
+                StageCursorShape()
+                    .stroke(.white, lineWidth: 1.6)
+            }
+            .shadow(color: .black.opacity(0.35), radius: 1, x: 0.5, y: 1)
+            .frame(width: cursorWidth, height: cursorHeight)
+            .scaleEffect(model.isMouseDown ? 0.95 : 1, anchor: .topLeading)
+            .animation(.easeOut(duration: 0.08), value: model.isMouseDown)
+    }
+
+    @ViewBuilder
+    private var scrollIndicator: some View {
+        if model.isScrolling {
+            let travel = CGFloat(min(abs(model.scrollDistance), 24) * model.scrollProgress)
+            let verticalTravel = model.scrollDirection == .down ? travel : -travel
+            Image(systemName: model.scrollDirection == .up ? "chevron.up" : "chevron.down")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.58))
+                .offset(x: cursorWidth + 7, y: cursorHeight * 0.6 + verticalTravel)
+        }
+    }
+
+    @ViewBuilder
+    private var typedTextBadge: some View {
+        if !model.typedText.isEmpty {
+            Text(model.typedText)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .lineLimit(1)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
+                .offset(x: cursorWidth + 8, y: -10)
         }
     }
 
