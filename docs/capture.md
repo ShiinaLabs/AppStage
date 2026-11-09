@@ -2,7 +2,7 @@
 
 AppStage provides four capture commands:
 
-- `snapshot` writes a PNG of a running app window with desktop around it.
+- `snapshot` writes a PNG of a running app window with transparent framing around it.
 - `record` launches and records one Scenario to a MOV.
 - `capture-all` discovers Scenarios and writes one MOV for each, plus `manifest.json`.
 - `verify` repeats every discovered Scenario in fresh processes and validates each MOV.

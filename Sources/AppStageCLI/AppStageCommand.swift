@@ -212,7 +212,7 @@ struct ListCommand: AsyncParsableCommand {
 struct SnapshotCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "snapshot",
-        abstract: "Capture a PNG of a running app window with desktop around it."
+        abstract: "Capture a PNG of a running app window with transparent framing around it."
     )
 
     @Option(name: .long, help: "Bundle identifier of the running app.")
@@ -221,10 +221,10 @@ struct SnapshotCommand: AsyncParsableCommand {
     @Option(name: .long, help: "PNG output path.")
     var output: String
 
-    @Option(name: .long, help: "Horizontal desktop margin in points.")
+    @Option(name: .long, help: "Horizontal transparent margin around the app window in points.")
     var horizontalMargin: Double = 220
 
-    @Option(name: .long, help: "Vertical desktop margin in points.")
+    @Option(name: .long, help: "Vertical transparent margin around the app window in points.")
     var verticalMargin: Double = 120
 
     func run() async throws {

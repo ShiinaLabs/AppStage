@@ -82,7 +82,7 @@ public actor StageControlClient {
         let request = StageAccessibilityRequest(operation: operation)
         let timer = Task {
             do { try await Task.sleep(for: timeout) } catch { return }
-            await self.failAccessibility(request.id, error: StageControlError.timedOut("accessibility request"))
+            self.failAccessibility(request.id, error: StageControlError.timedOut("accessibility request"))
         }
         defer { timer.cancel() }
         return try await withTaskCancellationHandler {
@@ -90,7 +90,7 @@ public actor StageControlClient {
                 accessibilityPending[request.id] = continuation
                 Task {
                     do { try await socket.send(.accessibilityRequest(request)) }
-                    catch { await self.failAccessibility(request.id, error: error) }
+                    catch { self.failAccessibility(request.id, error: error) }
                 }
             }
         } onCancel: {

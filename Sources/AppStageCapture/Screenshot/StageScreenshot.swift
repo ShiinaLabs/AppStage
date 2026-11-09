@@ -10,10 +10,10 @@ public enum StageScreenshotError: Error, Equatable {
     case unableToWritePNG
 }
 
-/// Captures a display crop that frames a target app window with desktop around it.
+/// Captures a display crop that frames a target app window with transparency around it.
 public enum StageScreenshot {
     public static let fullHDSize = CGSize(width: 1_920, height: 1_080)
-    private static let backgroundColor = CGColor(gray: 0, alpha: 1)
+    private static let clearBackgroundColor = CGColor(gray: 0, alpha: 0)
 
     public static func capture(
         window: StageCaptureWindow,
@@ -47,7 +47,7 @@ public enum StageScreenshot {
         configuration.destinationRect = destinationRect
         configuration.preservesAspectRatio = true
         configuration.showsCursor = false
-        configuration.backgroundColor = backgroundColor
+        configuration.backgroundColor = clearBackgroundColor
 
         return try await SCScreenshotManager.captureImage(
             contentFilter: filter,
