@@ -12,8 +12,7 @@ of the following without a concrete product need:
 - Automatic framing-margin adjustment.
 - Dynamic bitrate tuning.
 - Host-specific navigation or product strings in AppStage.
-- Control Protocol version bumps without a compatibility requirement.
-- Capture manifest schema bumps without a compatibility requirement.
+- Backward compatibility with older Control Protocol or capture manifest versions.
 
 ## Verification policy
 

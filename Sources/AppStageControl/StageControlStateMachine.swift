@@ -25,6 +25,8 @@ public struct StageControlStateMachine: Sendable {
             allowed = [.scenarioLoaded, .ready, .playing, .paused, .finished].contains(state)
         case .performAction:
             allowed = [.ready, .playing, .paused].contains(state)
+        case .prepareCapture:
+            allowed = state == .ready
         case .listScenarios:
             allowed = [.connected, .scenarioLoaded, .ready, .finished].contains(state)
         case .queryState:

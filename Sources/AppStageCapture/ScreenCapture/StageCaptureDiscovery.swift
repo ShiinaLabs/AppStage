@@ -144,7 +144,8 @@ public enum StageCaptureDiscovery {
     static func displayFilter(
         display: StageCaptureDisplay,
         including window: StageCaptureWindow,
-        includingApplicationWindows: Bool = false
+        includingApplicationWindows: Bool = false,
+        additionalWindows: [StageCaptureWindow] = []
     ) async throws -> SCContentFilter {
         let content = try await SCShareableContent.excludingDesktopWindows(
             false,
@@ -155,6 +156,19 @@ public enum StageCaptureDiscovery {
               capturedWindow.owningApplication?.processID == window.processIdentifier
         else {
             throw StageCaptureDiscoveryError.windowNotFound(bundleIdentifier: window.bundleIdentifier)
+        }
+
+        if !additionalWindows.isEmpty {
+            let requestedIDs = Set(additionalWindows.map(\.windowID)).union([window.windowID])
+            let selectedWindows = content.windows.filter { candidate in
+                requestedIDs.contains(candidate.windowID)
+                    && candidate.owningApplication?.bundleIdentifier == window.bundleIdentifier
+                    && candidate.owningApplication?.processID == window.processIdentifier
+            }
+            guard selectedWindows.count == requestedIDs.count else {
+                throw StageCaptureDiscoveryError.windowNotFound(bundleIdentifier: window.bundleIdentifier)
+            }
+            return SCContentFilter(display: display.screenCaptureDisplay, including: selectedWindows)
         }
 
         if includingApplicationWindows {

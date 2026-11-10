@@ -22,6 +22,15 @@ load → prepare → ready → play → finished
 - **play** runs the scripted sequence.
 - **finished** signals that all intended demo actions completed.
 
+## Static capture points
+
+A Host may advertise named static capture points in `StageScenarioMetadata`. The
+Host's `prepareCapture(at:)` implementation must establish the deterministic UI
+state for that point and return only when the visible result is ready to capture.
+The point ID is product-neutral; its mapping to data, layout, or animation state
+belongs to the Host. AppStage does not infer UI state from a playback timestamp
+or a fixed delay.
+
 ## Choose the right interaction
 
 1. **Semantic actions** make stable internal state changes that do not need a

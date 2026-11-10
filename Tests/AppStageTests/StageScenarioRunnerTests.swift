@@ -353,7 +353,7 @@ import Testing
         )
     }
 
-    @MainActor private final class TestCursor: StageCursorInteractionDriving {
+    @MainActor private final class TestCursor: StageCursorDriving {
         private(set) var positions: [StagePoint] = []
         private(set) var clickCount = 0
         private(set) var events: [String] = []

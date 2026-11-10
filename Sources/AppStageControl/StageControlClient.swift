@@ -10,6 +10,7 @@ public actor StageControlClient {
     private var readTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
     private var requestTasks: [UUID: Task<Void, Never>] = [:]
+    private var activeRequestID: UUID?
     private var accessibilityPending: [UUID: CheckedContinuation<StageAccessibilityResult, Error>] = [:]
     private var closed = false
     private var connectTimedOut = false
@@ -101,8 +102,23 @@ public actor StageControlClient {
     private func failAccessibility(_ id: UUID, error: Error) { accessibilityPending.removeValue(forKey: id)?.resume(throwing: error) }
 
     private func handle(_ request: StageControlRequest) async {
-        defer { requestTasks.removeValue(forKey: request.id) }
+        defer {
+            requestTasks.removeValue(forKey: request.id)
+            if activeRequestID == request.id { activeRequestID = nil }
+        }
         guard !closed && !Task.isCancelled, let socket else { return }
+        let isReadOnly = switch request.command {
+        case .listScenarios, .queryState: true
+        default: false
+        }
+        guard activeRequestID == nil || isReadOnly else {
+            try? await socket.send(.response(.init(
+                requestID: request.id,
+                result: .failure(.invalidState("Another Host request is still running"))
+            )))
+            return
+        }
+        if !isReadOnly { activeRequestID = request.id }
         do {
             try machine.begin(request.command)
             switch request.command {
@@ -112,6 +128,7 @@ public actor StageControlClient {
             case .pause: try await host.pauseScenario()
             case .reset: try await host.resetScenario()
             case let .performAction(action): try await host.performAction(action)
+            case let .prepareCapture(pointID): try await host.prepareCapture(at: pointID)
             case .listScenarios: break
             case .queryState: break
             case .seek: throw StageControlError.unsupported("seek reconstruction")

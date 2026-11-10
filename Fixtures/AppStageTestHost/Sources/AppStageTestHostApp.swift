@@ -29,6 +29,7 @@ struct AppStageTestHostApp: App {
 @Observable
 private final class FixtureRuntime: StageScenarioControlling {
     static let scenarioID = StageScenarioID("reliability-smoke")
+    static let summaryCapturePointID = StageCapturePointID("summary")
 
     let launch: StageLaunchConfiguration
     let cursor = StageCursorModel()
@@ -181,6 +182,19 @@ private final class FixtureRuntime: StageScenarioControlling {
         try await conditions.waitUntil(StageConditionID("fixture.start.ax-available"), timeout: .seconds(10))
     }
 
+    func prepareCapture(at pointID: StageCapturePointID) async throws {
+        guard loaded else { throw StageControlError.invalidState("Fixture Scenario is not loaded") }
+        guard pointID == Self.summaryCapturePointID else {
+            throw StageControlError.remoteFailure("Unknown fixture capture point: \(pointID.rawValue)")
+        }
+        isSheetPresented = false
+        menuActionCompleted = false
+        selectedMode = "advanced"
+        try await conditions.waitUntil(StageConditionID("fixture.animation.completed"), timeout: .seconds(5))
+        try await cursor.place(at: StagePoint(x: 220, y: 180))
+        try await cursor.show(duration: .zero)
+    }
+
     func playScenario() async throws {
         guard loaded, let runner else { throw StageControlError.invalidState("Fixture Scenario is not ready") }
         let task = runner.start()
@@ -211,7 +225,12 @@ private final class FixtureRuntime: StageScenarioControlling {
     }
 
     func availableScenarios() async -> [StageScenarioMetadata] {
-        [StageScenarioMetadata(id: Self.scenarioID, displayName: "Reliability Smoke", durationMilliseconds: 6_000)]
+        [StageScenarioMetadata(
+            id: Self.scenarioID,
+            displayName: "Reliability Smoke",
+            durationMilliseconds: 6_000,
+            capturePointIDs: [Self.summaryCapturePointID]
+        )]
     }
 
     func events() async -> AsyncStream<StageControlEvent> { eventStream }

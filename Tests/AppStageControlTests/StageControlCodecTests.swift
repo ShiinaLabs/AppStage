@@ -13,8 +13,14 @@ final class StageControlCodecTests: XCTestCase {
         XCTAssertEqual(try decoder.append(Array(bytes.dropFirst(7))), [first, second])
     }
 
+    func testStaticCapturePointRequestRoundTrip() throws {
+        let request = StageControlMessage.request(.init(command: .prepareCapture(StageCapturePointID("summary"))))
+        var decoder = StageControlFrameDecoder()
+        XCTAssertEqual(try decoder.append(StageControlCodec.encode(request)), [request])
+    }
+
     func testAccessibilityRequestAndResponseRoundTrip() throws {
-        let locator = StageAccessibilityLocator(role: "AXMenuItem", title: "Heatmap")
+        let locator = StageAccessibilityLocator(role: "AXButton", description: "Hide Sidebar")
         let request = StageControlMessage.accessibilityRequest(.init(operation: .press(locator)))
         let response = StageControlMessage.accessibilityResponse(.init(
             requestID: UUID(), result: .resolved(StageAccessibilityFrame(x: 10, y: 20, width: 30, height: 40))

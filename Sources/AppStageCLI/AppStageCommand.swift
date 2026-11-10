@@ -1,5 +1,6 @@
 import AppKit
 import AppStage
+import AppStageMac
 import AppStageCapture
 import AppStageControl
 import ArgumentParser
@@ -12,7 +13,7 @@ struct AppStageCommand: AsyncParsableCommand {
         abstract: "Launch, inspect, and capture macOS app scenarios.",
         subcommands: [
             ListCommand.self, ScenariosCommand.self, RunCommand.self,
-            SnapshotCommand.self, RecordCommand.self, CaptureAllCommand.self, VerifyCommand.self,
+            SnapshotCommand.self, CaptureSnapshotCommand.self, CaptureAllSnapshotsCommand.self, RecordCommand.self, CaptureAllCommand.self, VerifyCommand.self,
             DoctorCommand.self,
         ]
     )
@@ -227,6 +228,12 @@ struct SnapshotCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Vertical transparent margin around the app window in points.")
     var verticalMargin: Double = 120
 
+    @Flag(name: .long, help: "Include the macOS window shadow with transparent padding.")
+    var includeWindowShadow = false
+
+    @Flag(name: .long, help: "Include the AppStage demo cursor overlay in the PNG.")
+    var includeDemoCursor = false
+
     func run() async throws {
         let outputURL = URL(fileURLWithPath: output).standardizedFileURL
         guard outputURL.pathExtension.lowercased() == "png" else {
@@ -237,16 +244,147 @@ struct SnapshotCommand: AsyncParsableCommand {
         }
 
         let (window, display) = try await captureTarget(bundleIdentifier: bundleID)
-        let image = try await StageScreenshot.capture(
+        let image = try await capturePNG(
             window: window,
             display: display,
-            framing: .desktopAroundWindow(
-                horizontalMargin: CGFloat(horizontalMargin),
-                verticalMargin: CGFloat(verticalMargin)
-            )
+            outputURL: outputURL,
+            horizontalMargin: horizontalMargin,
+            verticalMargin: verticalMargin,
+            includeWindowShadow: includeWindowShadow,
+            includeDemoCursor: includeDemoCursor
         )
-        try StageScreenshot.writePNG(image, to: outputURL)
         print("Wrote \(image.width)×\(image.height) PNG to \(outputURL.path)")
+    }
+}
+
+struct CaptureSnapshotCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "capture-snapshot",
+        abstract: "Launch a controlled scenario, prepare a static capture point, and write a PNG."
+    )
+
+    @Option(name: .long, help: "Path to the target .app bundle.") var app: String
+    @Option(name: .long, help: "Scenario identifier to prepare.") var scenario: String
+    @Option(name: .long, help: "Host-declared static capture point identifier.") var checkpoint: String
+    @Option(name: .long, help: "PNG output path.") var output: String
+    @Option(name: .long, help: "Timeout in seconds for connection, preparation, and capture point (default: 30).") var timeout = 30
+    @Option(name: .long, help: "Horizontal transparent margin around the app window in points.") var horizontalMargin = 220.0
+    @Option(name: .long, help: "Vertical transparent margin outside the window shadow in points.") var verticalMargin = 120.0
+    @Flag(name: .long, help: "Include the macOS window shadow with transparent padding.") var includeWindowShadow = false
+    @Flag(name: .long, help: "Include the AppStage demo cursor overlay in the PNG.") var includeDemoCursor = false
+    @Flag(name: .long, help: "Terminate an already running target app and launch a new controlled instance.") var replaceExisting = false
+
+    func run() async throws {
+        guard (1...600).contains(timeout) else { throw ValidationError("--timeout must be between 1 and 600 seconds.") }
+        guard horizontalMargin.isFinite, verticalMargin.isFinite,
+              horizontalMargin >= 0, verticalMargin >= 0 else {
+            throw ValidationError("Capture margins must be finite, non-negative numbers.")
+        }
+        guard !scenario.isEmpty, !checkpoint.isEmpty else {
+            throw ValidationError("--scenario and --checkpoint must not be empty.")
+        }
+        let appURL = URL(fileURLWithPath: app).standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: appURL.path, isDirectory: &isDirectory), isDirectory.boolValue,
+              let bundleIdentifier = Bundle(url: appURL)?.bundleIdentifier, !bundleIdentifier.isEmpty else {
+            throw ValidationError("--app must point to an app bundle with a bundle identifier.")
+        }
+        let outputURL = URL(fileURLWithPath: output).standardizedFileURL
+        guard outputURL.pathExtension.lowercased() == "png" else {
+            throw ValidationError("--output must use a .png extension.")
+        }
+        guard !FileManager.default.fileExists(atPath: outputURL.path) else {
+            throw ValidationError("The output file already exists: \(outputURL.path)")
+        }
+        try await captureScenarioSnapshot(
+            appURL: appURL,
+            bundleIdentifier: bundleIdentifier,
+            scenarioID: StageScenarioID(scenario),
+            checkpointID: StageCapturePointID(checkpoint),
+            outputURL: outputURL,
+            timeout: .seconds(timeout),
+            horizontalMargin: horizontalMargin,
+            verticalMargin: verticalMargin,
+            includeWindowShadow: includeWindowShadow,
+            includeDemoCursor: includeDemoCursor,
+            policy: replaceExisting ? .replace : .reject
+        )
+    }
+}
+
+struct CaptureAllSnapshotsCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "capture-all-snapshots",
+        abstract: "Capture every Host-declared static capture point to PNGs in fresh app processes."
+    )
+
+    @Option(name: .long, help: "Path to the target .app bundle.") var app: String
+    @Option(name: .customLong("output-dir"), help: "Directory for PNGs and manifest.json.") var outputDirectory: String
+    @Option(name: .long, help: "Timeout in seconds for each Host lifecycle step (default: 30).") var timeout = 30
+    @Option(name: .long, help: "Horizontal transparent margin around each app window in points.") var horizontalMargin = 220.0
+    @Option(name: .long, help: "Vertical transparent margin outside the window shadow in points.") var verticalMargin = 120.0
+    @Flag(name: .long, help: "Include the macOS window shadow with transparent padding.") var includeWindowShadow = false
+    @Flag(name: .long, help: "Include the AppStage demo cursor overlay in each PNG.") var includeDemoCursor = false
+    @Flag(name: .long, help: "Terminate an already running target app and launch a new controlled instance.") var replaceExisting = false
+
+    func run() async throws {
+        guard (1...600).contains(timeout) else { throw ValidationError("--timeout must be between 1 and 600 seconds.") }
+        guard horizontalMargin.isFinite, verticalMargin.isFinite,
+              horizontalMargin >= 0, verticalMargin >= 0 else {
+            throw ValidationError("Capture margins must be finite, non-negative numbers.")
+        }
+        let appURL = URL(fileURLWithPath: app).standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: appURL.path, isDirectory: &isDirectory), isDirectory.boolValue,
+              let bundleIdentifier = Bundle(url: appURL)?.bundleIdentifier, !bundleIdentifier.isEmpty else {
+            throw ValidationError("--app must point to an app bundle with a bundle identifier.")
+        }
+        let outputURL = URL(fileURLWithPath: outputDirectory).standardizedFileURL
+        let captureTask = Task { @MainActor in
+            let workflow = StageBatchSnapshotWorkflow(
+                discoverScenarios: {
+                    try await discoverSnapshotScenarios(
+                    appURL: appURL,
+                    bundleIdentifier: bundleIdentifier,
+                    timeout: .seconds(timeout),
+                    policy: replaceExisting ? .replace : .reject
+                )
+            },
+            capturePoint: { scenarioID, pointID, fileURL in
+                try await captureScenarioSnapshot(
+                    appURL: appURL,
+                    bundleIdentifier: bundleIdentifier,
+                    scenarioID: scenarioID,
+                    checkpointID: pointID,
+                    outputURL: fileURL,
+                    timeout: .seconds(timeout),
+                    horizontalMargin: horizontalMargin,
+                    verticalMargin: verticalMargin,
+                    includeWindowShadow: includeWindowShadow,
+                    includeDemoCursor: includeDemoCursor,
+                    policy: replaceExisting ? .replace : .reject
+                )
+            },
+                outputDirectory: outputURL,
+                bundleIdentifier: bundleIdentifier,
+                horizontalMargin: horizontalMargin,
+                verticalMargin: verticalMargin,
+                includesWindowShadow: includeWindowShadow,
+                includesDemoCursor: includeDemoCursor
+            )
+            try await workflow.run()
+        }
+        let signalCancellation = StageRecordSignalCancellation(task: captureTask)
+        defer { signalCancellation.cancel() }
+        do {
+            try await withTaskCancellationHandler {
+                try await captureTask.value
+            } onCancel: {
+                captureTask.cancel()
+            }
+        } catch is CancellationError {
+            throw ValidationError("Snapshot batch cancelled.")
+        }
     }
 }
 
@@ -677,7 +815,7 @@ private func performVerification(
                 maxControlConnectDuration: nil, maxPrepareDuration: nil, maxFinalizeDuration: nil,
                 orphanProcessCount: 0, cleanupFailureCount: 0, determinismWarnings: [],
                 telemetryNotes: [
-                    "Condition IDs and AX element snapshots are unavailable in Control Protocol v3; no Host-side telemetry is inferred.",
+                    "Condition IDs and AX element snapshots are unavailable in Control Protocol v4; no Host-side telemetry is inferred.",
                     "NSWorkspace does not expose the launched GUI process exit code; process exit is verified, but the code is unavailable."
                 ], attempts: [], setupFailurePhase: "scenarioDiscovery", setupFailure: setupFailure
             )
@@ -849,7 +987,7 @@ private func performVerification(
             cleanupFailureCount: attempts.filter { !$0.cleanupPassed }.count,
             determinismWarnings: attempts.filter { $0.events.contains(where: { $0.phase == "determinismWarning" }) }.map { "\($0.scenarioID) #\($0.iteration)" },
             telemetryNotes: [
-                "Condition IDs and AX element snapshots are unavailable in Control Protocol v3; no Host-side telemetry is inferred.",
+                "Condition IDs and AX element snapshots are unavailable in Control Protocol v4; no Host-side telemetry is inferred.",
                 "NSWorkspace does not expose the launched GUI process exit code; process exit is verified, but the code is unavailable."
             ], attempts: attempts, setupFailurePhase: nil, setupFailure: nil
         )
@@ -895,7 +1033,7 @@ private func summaryText(_ summary: StageVerifySummary) -> String {
         lines += ["Setup failure:", "phase: \(summary.setupFailurePhase ?? "unknown")", "reason: \(setupFailure)", ""]
     }
     lines += ["Orphan process: \(summary.orphanProcessCount)", "Cleanup failure: \(summary.cleanupFailureCount)"]
-    lines += ["", "Telemetry gap: Control Protocol v3 does not expose Host condition IDs or AX snapshots."]
+    lines += ["", "Telemetry gap: Control Protocol v4 does not expose Host condition IDs or AX snapshots."]
     if !summary.determinismWarnings.isEmpty { lines += ["", "Determinism warnings:"] + summary.determinismWarnings }
     return lines.joined(separator: "\n") + "\n"
 }
@@ -947,6 +1085,164 @@ private func makeBatchRoundWorkflow(
         eventHandler: eventHandler
     )
     return (workflow, token, sessionID)
+}
+
+private func capturePNG(
+    window: StageCaptureWindow,
+    display: StageCaptureDisplay,
+    outputURL: URL,
+    horizontalMargin: Double,
+    verticalMargin: Double,
+    includeWindowShadow: Bool,
+    includeDemoCursor: Bool
+) async throws -> CGImage {
+    let cursorWindows: [StageCaptureWindow]
+    if includeDemoCursor {
+        let matchingWindows = try await StageCaptureDiscovery.windows(
+            bundleIdentifier: window.bundleIdentifier,
+            processIdentifier: window.processIdentifier
+        ).filter { $0.title == StageCursorModel.overlayWindowTitle }
+        guard matchingWindows.count == 1, let cursorWindow = matchingWindows.first else {
+            throw ValidationError("Expected exactly one AppStage demo cursor overlay window.")
+        }
+        cursorWindows = [cursorWindow]
+    } else {
+        cursorWindows = []
+    }
+    let shadowPadding = includeWindowShadow ? 40.0 : 0.0
+    let image = try await StageScreenshot.capture(
+        window: window,
+        display: display,
+        framing: .desktopAroundWindow(
+            horizontalMargin: CGFloat(horizontalMargin + shadowPadding),
+            verticalMargin: CGFloat(verticalMargin + shadowPadding)
+        ),
+        includesWindowShadow: includeWindowShadow,
+        includingWindows: cursorWindows
+    )
+    do {
+        try StageScreenshot.writePNG(image, to: outputURL)
+    } catch {
+        try? FileManager.default.removeItem(at: outputURL)
+        throw error
+    }
+    return image
+}
+
+@MainActor
+private func discoverSnapshotScenarios(
+    appURL: URL,
+    bundleIdentifier: String,
+    timeout: Duration,
+    policy: StageExistingApplicationPolicy
+) async throws -> [StageScenarioMetadata] {
+    let token = try StageControlToken.generate()
+    let sessionID = UUID()
+    let controller = StageControlController(
+        token: token,
+        sessionID: sessionID,
+        bundleIdentifier: bundleIdentifier
+    )
+    var session: StageAppSession?
+    do {
+        let port = try await controller.start()
+        let opened = try await StageAppSession.open(
+            appURL: appURL,
+            bundleIdentifier: bundleIdentifier,
+            arguments: [
+                "--appstage-discover-scenarios",
+                "--appstage-control-host", "127.0.0.1",
+                "--appstage-control-port", String(port),
+                "--appstage-control-token", token,
+                "--appstage-control-session", sessionID.uuidString,
+            ],
+            existingApplicationPolicy: policy
+        )
+        session = opened
+        await controller.bindExpectedPID(opened.processIdentifier)
+        try await controller.waitForHandshake(timeout: timeout)
+        let response = try await controller.request(.listScenarios, timeout: timeout)
+        guard let scenarios = response.scenarios, !scenarios.isEmpty else {
+            throw StageBatchRecordError.noScenarios
+        }
+        await controller.close()
+        await opened.finish()
+        return scenarios
+    } catch {
+        await controller.close()
+        await session?.finish()
+        throw error
+    }
+}
+
+@MainActor
+private func captureScenarioSnapshot(
+    appURL: URL,
+    bundleIdentifier: String,
+    scenarioID: StageScenarioID,
+    checkpointID: StageCapturePointID,
+    outputURL: URL,
+    timeout: Duration,
+    horizontalMargin: Double,
+    verticalMargin: Double,
+    includeWindowShadow: Bool,
+    includeDemoCursor: Bool,
+    policy: StageExistingApplicationPolicy
+) async throws {
+    let token = try StageControlToken.generate()
+    let sessionID = UUID()
+    let controller = StageControlController(
+        token: token,
+        sessionID: sessionID,
+        bundleIdentifier: bundleIdentifier,
+        accessibilityHandler: { operation, pid in StageAccessibilityController.handle(operation, pid: pid) }
+    )
+    var session: StageAppSession?
+    do {
+        let port = try await controller.start()
+        let opened = try await StageAppSession.open(
+            appURL: appURL,
+            bundleIdentifier: bundleIdentifier,
+            arguments: [
+                "--appstage-scenario", scenarioID.rawValue,
+                "--appstage-window", "1100x760",
+                "--appstage-control-host", "127.0.0.1",
+                "--appstage-control-port", String(port),
+                "--appstage-control-token", token,
+                "--appstage-control-session", sessionID.uuidString,
+            ],
+            existingApplicationPolicy: policy
+        )
+        session = opened
+        await controller.bindExpectedPID(opened.processIdentifier)
+        try await controller.waitForHandshake(timeout: timeout)
+        _ = try await controller.request(.loadScenario(scenarioID), timeout: timeout)
+        _ = try await controller.request(.prepare, timeout: timeout)
+        _ = try await controller.waitForEvent(.ready, timeout: timeout)
+        _ = try await controller.request(.prepareCapture(checkpointID), timeout: timeout)
+        let window = try await waitForWindow(
+            bundleIdentifier: bundleIdentifier,
+            processIdentifier: opened.processIdentifier,
+            timeout: timeout
+        )
+        let targetDisplay = try await display(for: window)
+        let image = try await capturePNG(
+            window: window,
+            display: targetDisplay,
+            outputURL: outputURL,
+            horizontalMargin: horizontalMargin,
+            verticalMargin: verticalMargin,
+            includeWindowShadow: includeWindowShadow,
+            includeDemoCursor: includeDemoCursor
+        )
+        await controller.close()
+        await opened.finish()
+        print("Wrote \(image.width)×\(image.height) PNG to \(outputURL.path)")
+    } catch {
+        await controller.close()
+        await session?.finish()
+        throw error
+    }
 }
 
 private func captureTarget(bundleIdentifier: String) async throws -> (StageCaptureWindow, StageCaptureDisplay) {

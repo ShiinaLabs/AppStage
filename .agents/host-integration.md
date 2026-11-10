@@ -15,14 +15,17 @@ Use this checklist when adding AppStage to a macOS app.
    the controlled provider already supplies a synthetic equivalent.
 6. Register Scenario metadata and implement load, prepare, play, pause, and
    reset behavior as required by the Host's scripts.
-7. Make prepare wait for data/model readiness and, when needed, the first real
+7. Advertise supported static capture points in Scenario metadata and implement
+   `prepareCapture(at:)` so it returns only when the requested visible result is
+   ready for capture.
+8. Make prepare wait for data/model readiness and, when needed, the first real
    interaction target in the Accessibility tree.
-8. Give interactive controls stable `accessibilityIdentifier` values and
+9. Give interactive controls stable `accessibilityIdentifier` values and
    register identifier-based targets.
-9. Connect `StageControlClient` only after the controlled runtime and Host
-   window are ready.
-10. Give the controlled window a deterministic size and placement.
-11. Keep all Host navigation and domain behavior inside the Host. AppStage
+10. Connect `StageControlClient` only after the controlled runtime and Host
+    window are ready.
+11. Give the controlled window a deterministic size and placement.
+12. Keep all Host navigation and domain behavior inside the Host. AppStage
     should know only `StageScenarioID` and Scenario metadata.
 
 ## Common pitfalls

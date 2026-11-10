@@ -11,6 +11,8 @@ final class AppStageCLITests: XCTestCase {
         XCTAssertTrue(result.standardOutput.contains("snapshot"))
         XCTAssertTrue(result.standardOutput.contains("record"))
         XCTAssertTrue(result.standardOutput.contains("capture-all"))
+        XCTAssertTrue(result.standardOutput.contains("capture-snapshot"))
+        XCTAssertTrue(result.standardOutput.contains("capture-all-snapshots"))
         XCTAssertTrue(result.standardOutput.contains("run"))
     }
 
@@ -123,12 +125,35 @@ final class AppStageCLITests: XCTestCase {
         ]))
     }
 
-    func testSnapshotHelpIncludesBundleIdentifierAndOutputOptions() throws {
+    func testSnapshotHelpIncludesCaptureOptions() throws {
         let result = try runCLI(["snapshot", "--help"])
 
         XCTAssertEqual(result.status, 0, result.standardError)
         XCTAssertTrue(result.standardOutput.contains("--bundle-id"))
         XCTAssertTrue(result.standardOutput.contains("--output"))
+        XCTAssertTrue(result.standardOutput.contains("--include-window-shadow"))
+        XCTAssertTrue(result.standardOutput.contains("--include-demo-cursor"))
+    }
+
+    func testControlledSnapshotCommandsParseCaptureOptions() throws {
+        let single = try CaptureSnapshotCommand.parse([
+            "--app", "/Applications/Example.app",
+            "--scenario", "overview",
+            "--checkpoint", "summary",
+            "--output", "/tmp/summary.png",
+            "--include-window-shadow",
+            "--include-demo-cursor",
+        ])
+        XCTAssertTrue(single.includeWindowShadow)
+        XCTAssertTrue(single.includeDemoCursor)
+
+        let batch = try CaptureAllSnapshotsCommand.parse([
+            "--app", "/Applications/Example.app",
+            "--output-dir", "/tmp/snapshots",
+            "--include-window-shadow",
+        ])
+        XCTAssertTrue(batch.includeWindowShadow)
+        XCTAssertFalse(batch.includeDemoCursor)
     }
 
     func testRecordRejectsMissingRequiredArguments() throws {

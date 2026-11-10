@@ -5,7 +5,9 @@ import SwiftUI
 
 @MainActor
 @Observable
-public final class StageCursorModel: StageCursorInteractionDriving {
+public final class StageCursorModel: StageCursorDriving {
+    public nonisolated static let overlayWindowTitle = "AppStage Demo Cursor"
+
     public private(set) var position = StagePoint(x: 0, y: 0)
     public private(set) var isVisible = false
     public var isClicking: Bool { isMouseDown }
@@ -297,6 +299,7 @@ private final class StageCursorOverlayWindowController {
             backing: .buffered,
             defer: false
         )
+        panel.title = StageCursorModel.overlayWindowTitle
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false

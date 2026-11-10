@@ -21,12 +21,20 @@ public struct StageAccessibilityLocator: Codable, Sendable, Equatable {
     public let identifier: String?
     public let role: String?
     public let title: String?
+    public let description: String?
     public let value: String?
 
-    public init(identifier: String? = nil, role: String? = nil, title: String? = nil, value: String? = nil) {
+    public init(
+        identifier: String? = nil,
+        role: String? = nil,
+        title: String? = nil,
+        description: String? = nil,
+        value: String? = nil
+    ) {
         self.identifier = identifier
         self.role = role
         self.title = title
+        self.description = description
         self.value = value
     }
 }
@@ -138,15 +146,30 @@ public struct StageScenarioScript: Sendable {
 }
 
 /// Small host-provided description returned by scenario discovery.
+/// A stable, product-neutral identifier for a static state a Host can prepare for capture.
+public struct StageCapturePointID: RawRepresentable, Hashable, Codable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) { self.rawValue = rawValue }
+    public init(_ rawValue: String) { self.init(rawValue: rawValue) }
+}
+
 public struct StageScenarioMetadata: Codable, Sendable, Equatable {
     public let id: StageScenarioID
     public let displayName: String?
     public let durationMilliseconds: Int64?
+    public let capturePointIDs: [StageCapturePointID]
 
-    public init(id: StageScenarioID, displayName: String? = nil, durationMilliseconds: Int64? = nil) {
+    public init(
+        id: StageScenarioID,
+        displayName: String? = nil,
+        durationMilliseconds: Int64? = nil,
+        capturePointIDs: [StageCapturePointID] = []
+    ) {
         self.id = id
         self.displayName = displayName
         self.durationMilliseconds = durationMilliseconds
+        self.capturePointIDs = capturePointIDs
     }
 }
 
@@ -262,12 +285,6 @@ public protocol StageAccessibilityInteractionDriving: AnyObject {
 public protocol StageCursorDriving: AnyObject {
     func move(to point: StagePoint, duration: Duration) async throws
     func click() async throws
-}
-
-/// Visual-only cursor operations. Hosts that only implement the original
-/// movement and click protocol remain source-compatible with existing scripts.
-@MainActor
-public protocol StageCursorInteractionDriving: StageCursorDriving {
     func place(at point: StagePoint) async throws
     func show(duration: Duration) async throws
     func hide(duration: Duration) async throws
@@ -280,13 +297,11 @@ public protocol StageCursorInteractionDriving: StageCursorDriving {
 }
 
 public enum StageScenarioRunnerError: Error, Equatable, Sendable, LocalizedError {
-    case cursorInteractionUnavailable
     case accessibilityInteractionUnavailable
     case accessibilityFrameConversionUnavailable
 
     public var errorDescription: String? {
         switch self {
-        case .cursorInteractionUnavailable: "The host cursor does not support this interaction."
         case .accessibilityInteractionUnavailable: "The host has no Accessibility interaction bridge."
         case .accessibilityFrameConversionUnavailable: "The host cannot map the Accessibility frame into its cursor overlay."
         }
@@ -354,27 +369,27 @@ public final class StageScenarioRunner {
                         try await cursor.click()
                     case let .placeCursor(target, offset):
                         let point = try await targets.resolve(target)
-                        try await interactions.place(at: StagePoint(x: point.x + offset.x, y: point.y + offset.y))
+                        try await cursor.place(at: StagePoint(x: point.x + offset.x, y: point.y + offset.y))
                     case let .showCursor(duration):
-                        try await interactions.show(duration: duration)
+                        try await cursor.show(duration: duration)
                     case let .hideCursor(duration):
-                        try await interactions.hide(duration: duration)
+                        try await cursor.hide(duration: duration)
                     case let .hover(target, duration, movementDuration):
                         let point = try await targets.resolve(target)
                         try await cursor.move(to: point, duration: movementDuration)
-                        try await interactions.hover(for: duration)
+                        try await cursor.hover(for: duration)
                     case .mouseDown:
-                        try await interactions.mouseDown()
+                        try await cursor.mouseDown()
                     case .mouseUp:
-                        try await interactions.mouseUp()
+                        try await cursor.mouseUp()
                     case let .doubleClick(target, movementDuration, clickInterval):
                         let point = try await targets.resolve(target)
                         try await cursor.move(to: point, duration: movementDuration)
-                        try await interactions.doubleClick(interval: clickInterval)
+                        try await cursor.doubleClick(interval: clickInterval)
                     case let .interact(target, action, condition, movementDuration, hoverDuration, conditionTimeout):
                         let point = try await targets.resolve(target)
                         try await cursor.move(to: point, duration: movementDuration)
-                        if hoverDuration > .zero { try await interactions.hover(for: hoverDuration) }
+                        if hoverDuration > .zero { try await cursor.hover(for: hoverDuration) }
                         try await cursor.click()
                         if let action { try await actions.execute(action) }
                         if let condition { try await conditions.waitUntil(condition, timeout: conditionTimeout) }
@@ -384,18 +399,18 @@ public final class StageScenarioRunner {
                         let frame = try await accessibility.resolve(target)
                         guard let point = accessibilityFrameToPoint(frame) else { throw StageTargetRegistryError.unavailableTarget(target) }
                         try await cursor.move(to: point, duration: movementDuration)
-                        if hoverDuration > .zero { try await interactions.hover(for: hoverDuration) }
+                        if hoverDuration > .zero { try await cursor.hover(for: hoverDuration) }
                         try await cursor.click()
                         try await accessibility.press(target)
                         if let condition { try await conditions.waitUntil(condition, timeout: conditionTimeout) }
                     case let .scroll(target, direction, amount, movementDuration, hoverDuration, scrollDuration, action):
                         let point = try await targets.resolve(target)
                         try await cursor.move(to: point, duration: movementDuration)
-                        if hoverDuration > .zero { try await interactions.hover(for: hoverDuration) }
-                        try await interactions.scroll(direction: direction, amount: amount, duration: scrollDuration)
+                        if hoverDuration > .zero { try await cursor.hover(for: hoverDuration) }
+                        try await cursor.scroll(direction: direction, amount: amount, duration: scrollDuration)
                         if let action { try await actions.execute(action) }
                     case let .typeText(text, characterInterval):
-                        try await interactions.typeText(text, characterInterval: characterInterval)
+                        try await cursor.typeText(text, characterInterval: characterInterval)
                     case .finish:
                         state = .finished
                         return
@@ -419,12 +434,4 @@ public final class StageScenarioRunner {
         runTask?.cancel()
     }
 
-    private var interactions: any StageCursorInteractionDriving {
-        get throws {
-            guard let cursor = cursor as? any StageCursorInteractionDriving else {
-                throw StageScenarioRunnerError.cursorInteractionUnavailable
-            }
-            return cursor
-        }
-    }
 }

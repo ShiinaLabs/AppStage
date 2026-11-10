@@ -11,24 +11,30 @@ private actor ExampleHost: StageScenarioControlling {
     private let prepareStarted: AsyncStream<Void>.Continuation
     private let cancellationStream: AsyncStream<Void>
     private let prepareCancelled: AsyncStream<Void>.Continuation
+    private let captureStream: AsyncStream<Void>
+    private let captureStarted: AsyncStream<Void>.Continuation
     private(set) var disconnected = false
     private let holdPrepare: Bool
     private let cancellablePrepare: Bool
     private let throwUnknownAction: Bool
     private let finishInsidePlay: Bool
     private let failInsidePlay: Bool
+    private let holdCapture: Bool
+    private var captureWaiter: CheckedContinuation<Void, Never>?
     private var prepareWaiter: CheckedContinuation<Void, Never>?
     private var playWaiter: CheckedContinuation<Void, Never>?
 
-    init(holdPrepare: Bool = false, finishInsidePlay: Bool = false, failInsidePlay: Bool = false, cancellablePrepare: Bool = false, throwUnknownAction: Bool = false) {
+    init(holdPrepare: Bool = false, finishInsidePlay: Bool = false, failInsidePlay: Bool = false, cancellablePrepare: Bool = false, throwUnknownAction: Bool = false, holdCapture: Bool = false) {
         self.holdPrepare = holdPrepare
         self.finishInsidePlay = finishInsidePlay
         self.failInsidePlay = failInsidePlay
         self.cancellablePrepare = cancellablePrepare
         self.throwUnknownAction = throwUnknownAction
+        self.holdCapture = holdCapture
         (stream, continuation) = AsyncStream.makeStream()
         (prepareStream, prepareStarted) = AsyncStream.makeStream()
         (cancellationStream, prepareCancelled) = AsyncStream.makeStream()
+        (captureStream, captureStarted) = AsyncStream.makeStream()
     }
 
     func loadScenario(_ id: StageScenarioID) async throws { scenarioID = id }
@@ -42,6 +48,18 @@ private actor ExampleHost: StageScenarioControlling {
             }
         }
         if holdPrepare { await withCheckedContinuation { prepareWaiter = $0 } }
+    }
+    func prepareCapture(at pointID: StageCapturePointID) async throws {
+        captureStarted.yield(())
+        if holdCapture { await withCheckedContinuation { captureWaiter = $0 } }
+    }
+    func waitUntilCapturePreparing() async {
+        var iterator = captureStream.makeAsyncIterator()
+        _ = await iterator.next()
+    }
+    func releaseCapture() {
+        captureWaiter?.resume()
+        captureWaiter = nil
     }
     func waitUntilPreparing() async {
         var iterator = prepareStream.makeAsyncIterator()
@@ -66,11 +84,14 @@ private actor ExampleHost: StageScenarioControlling {
     func performAction(_ action: StageAction) async throws {
         if throwUnknownAction { throw StageActionRegistryError.unknownAction(action.id) }
     }
+    func availableScenarios() async -> [StageScenarioMetadata] { [] }
     func events() async -> AsyncStream<StageControlEvent> { stream }
     func controlDisconnected() async {
         disconnected = true
         prepareWaiter?.resume()
         prepareWaiter = nil
+        captureWaiter?.resume()
+        captureWaiter = nil
         playWaiter?.resume()
         playWaiter = nil
     }
@@ -78,6 +99,38 @@ private actor ExampleHost: StageScenarioControlling {
 }
 
 final class StageControlTransportTests: XCTestCase {
+    func testCapturePointPreparationRejectsConcurrentPlayback() async throws {
+        let token = try StageControlToken.generate()
+        let sessionID = UUID()
+        let controller = StageControlController(token: token, sessionID: sessionID, bundleIdentifier: "example.app")
+        let port = try await controller.start()
+        await controller.bindExpectedPID(42)
+        let host = ExampleHost(holdCapture: true)
+        let client = StageControlClient(host: host)
+        let connect = Task { try await client.connect(port: port, token: token, sessionID: sessionID, bundleIdentifier: "example.app", pid: 42) }
+        try await controller.waitForHandshake(timeout: .seconds(2))
+        try await connect.value
+        _ = try await controller.request(.loadScenario(StageScenarioID("example")), timeout: .seconds(2))
+        _ = try await controller.request(.prepare, timeout: .seconds(2))
+        _ = try await controller.waitForEvent(.ready, timeout: .seconds(2))
+
+        let capture = Task {
+            try await controller.request(.prepareCapture(StageCapturePointID("summary")), timeout: .seconds(2))
+        }
+        await host.waitUntilCapturePreparing()
+        do {
+            _ = try await controller.request(.play, timeout: .seconds(2))
+            XCTFail("Playback must not overlap capture point preparation")
+        } catch {
+            XCTAssertEqual(error as? StageControlError, .invalidState("Another Host request is still running"))
+        }
+        await host.releaseCapture()
+        let result = try await capture.value
+        XCTAssertEqual(result.state, .ready)
+        await controller.close()
+        await client.close()
+    }
+
     func testLoopbackHandshakeCorrelatedRequestsAndFinishedEvent() async throws {
         let token = try StageControlToken.generate()
         let sessionID = UUID()

@@ -10,6 +10,16 @@ final class AppStageTests: XCTestCase {
         XCTAssertEqual(id.rawValue, "scenario-a")
     }
 
+    func testScenarioMetadataRoundTripsCapturePointIDs() throws {
+        let metadata = StageScenarioMetadata(
+            id: StageScenarioID("overview"),
+            capturePointIDs: [StageCapturePointID("summary"), StageCapturePointID("details")]
+        )
+        let decoded = try JSONDecoder().decode(StageScenarioMetadata.self, from: JSONEncoder().encode(metadata))
+
+        XCTAssertEqual(decoded, metadata)
+    }
+
     func testLaunchConfigurationParsesRecognizedOptionsAndIgnoresOtherArguments() throws {
         let configuration = try StageLaunchConfiguration(arguments: [
             "/Applications/Example.app/Contents/MacOS/Example",

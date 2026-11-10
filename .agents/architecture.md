@@ -22,10 +22,10 @@ Host app ↔ loopback Control Channel ↔ appstage CLI
                                          └─ ScreenCaptureKit → PNG / MOV
 ```
 
-The current Control Protocol is v3. It binds a session to a token, session UUID,
-bundle identifier, and process ID. Keep v3 unless a concrete compatibility
-requirement needs a protocol change; update both sides together when one is
-necessary.
+Control Protocol v4 binds a session to a token, session UUID, bundle identifier,
+and process ID, and supports Host-declared static capture points. Host and CLI
+must use the latest protocol version together; AppStage does not support older
+protocol versions or fallback behavior.
 
 ## Scenario lifecycle and action types
 

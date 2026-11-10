@@ -2,7 +2,7 @@ import AppStage
 import Foundation
 
 public enum StageControlProtocol {
-    public static let version = 3
+    public static let version = 4
     public static let maximumMessageSize = 1_048_576
 }
 
@@ -91,6 +91,7 @@ public enum StageControlCommand: Codable, Sendable, Equatable {
     case pause
     case reset
     case performAction(StageAction)
+    case prepareCapture(StageCapturePointID)
     case listScenarios
     case queryState
     case seek(positionMilliseconds: Int64)

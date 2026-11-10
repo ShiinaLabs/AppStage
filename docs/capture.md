@@ -1,11 +1,44 @@
 # Capture
 
-AppStage provides four capture commands:
+AppStage provides these capture commands:
 
 - `snapshot` writes a PNG of a running app window with transparent framing around it.
+- `capture-snapshot` launches one controlled Scenario, prepares a static capture point, and writes a PNG.
+- `capture-all-snapshots` discovers and captures every Host-declared static capture point to PNGs and `manifest.json`.
 - `record` launches and records one Scenario to a MOV.
 - `capture-all` discovers Scenarios and writes one MOV for each, plus `manifest.json`.
 - `verify` repeats every discovered Scenario in fresh processes and validates each MOV.
+
+## Static scenario screenshots
+
+Hosts list supported capture point IDs in each `StageScenarioMetadata`. A capture
+point is a named, deterministic visible result. The Host implements
+`prepareCapture(at:)` to establish that result and returns only when it is ready;
+AppStage does not seek playback by timestamp or use a fixed delay to guess UI
+readiness.
+
+Capture one point:
+
+```sh
+appstage capture-snapshot --app "/Applications/Example.app" \\
+  --scenario overview --checkpoint summary --output ./Artifacts/summary.png
+```
+
+Capture all advertised points sequentially, each in a fresh process:
+
+```sh
+appstage capture-all-snapshots --app "/Applications/Example.app" \\
+  --output-dir ./Artifacts/snapshots
+```
+
+The batch command writes a PNG and manifest entry for each point. It continues
+after an individual failure and exits unsuccessfully after writing the final
+manifest if any point failed. All PNG commands accept `--horizontal-margin` and
+`--vertical-margin` for transparent padding outside the captured window. Add
+`--include-window-shadow` to preserve the macOS shadow and reserve 40 points for
+it. Add `--include-demo-cursor` to capture the AppStage cursor overlay window;
+the Host must show the cursor at the requested capture point. These two flags
+are available on both `snapshot` and the controlled screenshot commands.
 
 ## Single recording
 
@@ -83,7 +116,7 @@ Each invocation creates a timestamped `run-*` directory containing
 `result.json`, `trace.json`, and `recording.mov`. Failed attempts also include
 `diagnostics.json`.
 
-Control Protocol v3 does not report Host-internal condition IDs or detailed AX
+Control Protocol v4 does not report Host-internal condition IDs or detailed AX
 snapshots. The current report marks those telemetry sources unavailable rather
 than inferring them from video or treating a successful command as evidence.
 

@@ -42,7 +42,7 @@ music, final-video assembly, or general computer use.
 - Do not synthesize physical `CGEvent` input without a demonstrated requirement.
 - Fail closed when capture quality or complete-frame writing cannot be maintained.
 - Do not add video editing or final-assembly responsibilities.
-- Keep Control Protocol v3 and manifest schema v1 unless a concrete compatibility need requires a version change.
+- Use the latest Control Protocol and manifest schema only; do not add backward compatibility for older versions.
 
 ## Tests and verification
 

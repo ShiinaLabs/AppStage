@@ -60,8 +60,9 @@ enum StageAccessibilityController {
             matches = elements.filter { element in
                 guard locator.role == nil || (try? element.getRole()?.rawValue) == locator.role else { return false }
                 if let title = locator.title, (try? element.getTitle()) != title { return false }
+                if let description = locator.description, (try? element.getDescription()) != description { return false }
                 if let value = locator.value, ((try? element.getValue() as String?) ?? nil) != value { return false }
-                return locator.title != nil || locator.value != nil
+                return locator.title != nil || locator.description != nil || locator.value != nil
             }
         }
         guard !matches.isEmpty else { throw AccessibilityLookupError.notFound }

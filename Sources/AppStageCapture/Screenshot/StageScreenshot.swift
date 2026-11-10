@@ -19,7 +19,9 @@ public enum StageScreenshot {
         window: StageCaptureWindow,
         display: StageCaptureDisplay,
         framing: StageCaptureFraming,
-        outputSize: CGSize = fullHDSize
+        outputSize: CGSize = fullHDSize,
+        includesWindowShadow: Bool = false,
+        includingWindows: [StageCaptureWindow] = []
     ) async throws -> CGImage {
         guard outputSize.width.isFinite, outputSize.height.isFinite,
               outputSize.width > 0, outputSize.height > 0,
@@ -39,7 +41,11 @@ public enum StageScreenshot {
             sourceSize: sourceRect.size,
             outputSize: outputSize
         )
-        let filter = try await StageCaptureDiscovery.displayFilter(display: display, including: window)
+        let filter = try await StageCaptureDiscovery.displayFilter(
+            display: display,
+            including: window,
+            additionalWindows: includingWindows
+        )
         let configuration = SCStreamConfiguration()
         configuration.sourceRect = sourceRect
         configuration.width = Int(outputSize.width)
@@ -47,6 +53,7 @@ public enum StageScreenshot {
         configuration.destinationRect = destinationRect
         configuration.preservesAspectRatio = true
         configuration.showsCursor = false
+        configuration.ignoreShadowsDisplay = !includesWindowShadow
         configuration.backgroundColor = clearBackgroundColor
 
         return try await SCScreenshotManager.captureImage(
