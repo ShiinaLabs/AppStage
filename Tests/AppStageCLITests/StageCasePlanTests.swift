@@ -33,6 +33,44 @@ final class StageCasePlanTests: XCTestCase {
         XCTAssertEqual(selected.map { $0.capturePointID?.rawValue }, ["details", "summary"])
     }
 
+    func testStructuredTargetsAndGeneratedCaseIDsRemainUniqueWithSlashes() throws {
+        let plan = try loadPlan("""
+        {
+          "schemaVersion": 1,
+          "cases": [
+            { "id": "scenario-target", "scenarioID": "foo/bar" },
+            { "id": "point-target", "scenarioID": "foo", "capturePointID": "bar" }
+          ],
+          "suites": { "scenario": ["scenario-target"] }
+        }
+        """)
+        let selected = try plan.select(
+            from: [
+                StageScenarioMetadata(id: StageScenarioID("foo/bar")),
+                StageScenarioMetadata(id: StageScenarioID("foo"), capturePointIDs: [StageCapturePointID("bar")]),
+            ],
+            kind: .scenario,
+            suite: "scenario",
+            includes: [],
+            excludes: []
+        )
+        XCTAssertEqual(selected.map(\.scenario.id.rawValue), ["foo/bar"])
+
+        let generated = try StageCasePlan.select(
+            from: [
+                StageScenarioMetadata(id: StageScenarioID("foo/bar"), capturePointIDs: [StageCapturePointID("baz")]),
+                StageScenarioMetadata(id: StageScenarioID("foo"), capturePointIDs: [StageCapturePointID("bar/baz")]),
+            ],
+            using: nil,
+            kind: .capturePoint,
+            suite: nil,
+            includes: [],
+            excludes: []
+        )
+        XCTAssertEqual(generated.map(\.id), ["7:foo/bar3:baz", "3:foo7:bar/baz"])
+        XCTAssertEqual(Set(generated.map(\.id)).count, generated.count)
+    }
+
     func testUnconfiguredSelectionUsesAllDiscoveredScenariosAndCapturePoints() throws {
         let scenarios = [
             StageScenarioMetadata(id: StageScenarioID("overview"), capturePointIDs: [StageCapturePointID("summary")]),
@@ -57,7 +95,7 @@ final class StageCasePlanTests: XCTestCase {
         )
 
         XCTAssertEqual(recordings.map(\.id), ["overview", "settings"])
-        XCTAssertEqual(snapshots.map(\.id), ["overview/summary"])
+        XCTAssertEqual(snapshots.map(\.id), ["8:overview7:summary"])
         XCTAssertThrowsError(try StageCasePlan.select(
             from: scenarios,
             using: nil,

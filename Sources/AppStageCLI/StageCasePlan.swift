@@ -47,6 +47,11 @@ struct StageCasePlan: Decodable, Sendable {
         case capturePoint
     }
 
+    private enum Target: Hashable {
+        case scenario(String)
+        case capturePoint(scenarioID: String, capturePointID: String)
+    }
+
     struct SelectedCase: Equatable, Sendable {
         let id: String
         let scenario: StageScenarioMetadata
@@ -141,7 +146,7 @@ struct StageCasePlan: Decodable, Sendable {
                 case .capturePoint:
                     scenario.capturePointIDs.map { point in
                         Case(
-                            id: "\(scenario.id.rawValue)/\(point.rawValue)",
+                            id: "\(scenario.id.rawValue.utf8.count):\(scenario.id.rawValue)\(point.rawValue.utf8.count):\(point.rawValue)",
                             scenarioID: scenario.id.rawValue,
                             capturePointID: point.rawValue
                         )
@@ -198,7 +203,7 @@ struct StageCasePlan: Decodable, Sendable {
     private func validate() throws {
         guard schemaVersion == 1 else { throw StageCasePlanError.unsupportedSchemaVersion(schemaVersion) }
         var caseIDs = Set<String>()
-        var targets = Set<String>()
+        var targets = Set<Target>()
         for testCase in cases {
             guard !testCase.id.isEmpty else { throw StageCasePlanError.emptyIdentifier("case") }
             guard !testCase.scenarioID.isEmpty else { throw StageCasePlanError.emptyIdentifier("scenario") }
@@ -206,8 +211,18 @@ struct StageCasePlan: Decodable, Sendable {
                 throw StageCasePlanError.emptyIdentifier("capture point")
             }
             guard caseIDs.insert(testCase.id).inserted else { throw StageCasePlanError.duplicateCaseID(testCase.id) }
-            let target = testCase.capturePointID.map { "\(testCase.scenarioID)/\($0)" } ?? testCase.scenarioID
-            guard targets.insert(target).inserted else { throw StageCasePlanError.duplicateTarget(target) }
+            let target: Target
+            let targetDescription: String
+            if let capturePointID = testCase.capturePointID {
+                target = .capturePoint(scenarioID: testCase.scenarioID, capturePointID: capturePointID)
+                targetDescription = "\(testCase.scenarioID)/\(capturePointID)"
+            } else {
+                target = .scenario(testCase.scenarioID)
+                targetDescription = testCase.scenarioID
+            }
+            guard targets.insert(target).inserted else {
+                throw StageCasePlanError.duplicateTarget(targetDescription)
+            }
         }
 
         for (suite, ids) in suites {

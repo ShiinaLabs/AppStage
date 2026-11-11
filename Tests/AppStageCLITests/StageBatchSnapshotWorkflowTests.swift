@@ -79,7 +79,7 @@ final class StageBatchSnapshotWorkflowTests: XCTestCase {
         XCTAssertEqual(items.map { $0["status"] as? String }, ["failed", "completed"])
         XCTAssertEqual(items.map { $0["output"] as? String }, ["overview--summary.png", "overview--details.png"])
         XCTAssertEqual(manifest["schemaVersion"] as? Int, 2)
-        XCTAssertEqual(items.map { $0["caseID"] as? String }, ["overview/summary", "overview/details"])
+        XCTAssertEqual(items.map { $0["caseID"] as? String }, ["8:overview7:summary", "8:overview7:details"])
     }
 
     func testCasePlanSelectionIsRecordedAndValidatedBeforeOutputDirectoryCreation() async throws {
@@ -121,12 +121,37 @@ final class StageBatchSnapshotWorkflowTests: XCTestCase {
         XCTAssertEqual(items.map { $0["caseID"] as? String }, ["overview-summary"])
     }
 
-    func testInvalidCasePlanDoesNotCreateOutputDirectory() async throws {
+    func testHostWithoutCapturePointsUsesDedicatedError() async throws {
         let outputDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: outputDirectory) }
         let workflow = StageBatchSnapshotWorkflow(
             discoverScenarios: { [StageScenarioMetadata(id: StageScenarioID("overview"))] },
+            capturePoint: { _, _, _ in XCTFail("Capture must not start") },
+            outputDirectory: outputDirectory,
+            bundleIdentifier: "example.app",
+            horizontalMargin: 12,
+            verticalMargin: 8,
+            includesWindowShadow: false,
+            includesDemoCursor: false
+        )
+        do {
+            try await workflow.run()
+            XCTFail("Expected no capture points to fail")
+        } catch {
+            XCTAssertEqual(error as? StageBatchSnapshotError, .noCapturePoints)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outputDirectory.path))
+    }
+
+    func testInvalidCasePlanDoesNotCreateOutputDirectory() async throws {
+        let outputDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: outputDirectory) }
+        let workflow = StageBatchSnapshotWorkflow(
+            discoverScenarios: {
+                [StageScenarioMetadata(id: StageScenarioID("overview"), capturePointIDs: [StageCapturePointID("summary")])]
+            },
             capturePoint: { _, _, _ in XCTFail("Capture must not start") },
             outputDirectory: outputDirectory,
             bundleIdentifier: "example.app",

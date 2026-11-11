@@ -80,6 +80,9 @@ final class StageBatchSnapshotWorkflow {
 
     func run() async throws {
         let scenarios = try await discoverScenarios()
+        guard scenarios.contains(where: { !$0.capturePointIDs.isEmpty }) else {
+            throw StageBatchSnapshotError.noCapturePoints
+        }
         let selectedCases = try StageCasePlan.select(
             from: scenarios,
             using: casePlan,
@@ -96,7 +99,6 @@ final class StageBatchSnapshotWorkflow {
                 .replacingOccurrences(of: ".mov", with: "")
             return (selectedCase, "\(scenarioBase)--\(pointBase).png")
         }
-        guard !entries.isEmpty else { throw StageBatchSnapshotError.noCapturePoints }
         try prepareOutputDirectory()
         var collisionKeys = Set<String>()
         for (_, fileName) in entries {
