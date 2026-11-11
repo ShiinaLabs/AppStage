@@ -71,8 +71,21 @@ struct StageVerifyScenarioSummary: Codable {
     }
 }
 
+struct StageVerifyConfigurationSummary: Codable {
+    let timeoutSeconds: Int
+    let retainMovies: String
+    let videoOutputMode: String
+}
+
 struct StageVerifySummary: Codable {
+    let schemaVersion: Int
+    let configuration: StageVerifyConfigurationSummary
     let generatedAt: Date
+    let casePlanPath: String?
+    let suite: String?
+    let filters: [String]
+    let exclusions: [String]
+    let selectedCases: [String]
     let iterationsRequested: Int
     let attemptsTotal: Int
     let passed: Int

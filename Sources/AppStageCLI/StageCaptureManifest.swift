@@ -20,6 +20,7 @@ enum StageBatchScenarioStatus: String, Codable, Sendable {
 struct StageCaptureManifest: Codable, Equatable, Sendable {
     struct Capture: Codable, Equatable, Sendable {
         let frameRate: Int
+        let timeoutSeconds: Int
         let width: Int
         let height: Int
         let horizontalMargin: Double
@@ -28,12 +29,13 @@ struct StageCaptureManifest: Codable, Equatable, Sendable {
         let videoOutputMode: StageVideoOutputMode
 
         private enum CodingKeys: String, CodingKey {
-            case frameRate, width, height, horizontalMargin, verticalMargin, backgroundImage, videoOutputMode
+            case frameRate, timeoutSeconds, width, height, horizontalMargin, verticalMargin, backgroundImage, videoOutputMode
         }
 
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(frameRate, forKey: .frameRate)
+            try container.encode(timeoutSeconds, forKey: .timeoutSeconds)
             try container.encode(width, forKey: .width)
             try container.encode(height, forKey: .height)
             try container.encode(horizontalMargin, forKey: .horizontalMargin)
@@ -48,6 +50,7 @@ struct StageCaptureManifest: Codable, Equatable, Sendable {
     }
 
     struct Scenario: Codable, Equatable, Sendable {
+        let caseID: String
         let id: String
         let displayName: String?
         let declaredDurationMilliseconds: Int64?
@@ -56,11 +59,12 @@ struct StageCaptureManifest: Codable, Equatable, Sendable {
         var error: String?
 
         private enum CodingKeys: String, CodingKey {
-            case id, displayName, declaredDurationMilliseconds, output, status, error
+            case caseID, id, displayName, declaredDurationMilliseconds, output, status, error
         }
 
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(caseID, forKey: .caseID)
             try container.encode(id, forKey: .id)
             if let displayName { try container.encode(displayName, forKey: .displayName) }
             else { try container.encodeNil(forKey: .displayName) }
@@ -81,11 +85,16 @@ struct StageCaptureManifest: Codable, Equatable, Sendable {
     let bundleIdentifier: String
     let startedAt: String
     var finishedAt: String?
+    let casePlanPath: String?
+    let suite: String?
+    let filters: [String]
+    let exclusions: [String]
     let capture: Capture
     var scenarios: [Scenario]
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, status, bundleIdentifier, startedAt, finishedAt, capture, scenarios
+        case schemaVersion, status, bundleIdentifier, startedAt, finishedAt
+        case casePlanPath, suite, filters, exclusions, capture, scenarios
     }
 
     func encode(to encoder: Encoder) throws {
@@ -96,6 +105,10 @@ struct StageCaptureManifest: Codable, Equatable, Sendable {
         try container.encode(startedAt, forKey: .startedAt)
         if let finishedAt { try container.encode(finishedAt, forKey: .finishedAt) }
         else { try container.encodeNil(forKey: .finishedAt) }
+        try container.encodeIfPresent(casePlanPath, forKey: .casePlanPath)
+        try container.encodeIfPresent(suite, forKey: .suite)
+        try container.encode(filters, forKey: .filters)
+        try container.encode(exclusions, forKey: .exclusions)
         try container.encode(capture, forKey: .capture)
         try container.encode(scenarios, forKey: .scenarios)
     }
@@ -103,19 +116,29 @@ struct StageCaptureManifest: Codable, Equatable, Sendable {
     init(
         bundleIdentifier: String,
         captureConfiguration: StageCaptureConfiguration,
+        timeoutSeconds: Int = 30,
         horizontalMargin: Double,
         verticalMargin: Double,
+        casePlanPath: String? = nil,
+        suite: String? = nil,
+        filters: [String] = [],
+        exclusions: [String] = [],
         startedAt: Date = Date(),
         scenarios: [Scenario]
     ) {
-        self.schemaVersion = 1
+        self.schemaVersion = 2
         self.status = .running
         self.bundleIdentifier = bundleIdentifier
         self.startedAt = Self.timestamp(startedAt)
         self.finishedAt = nil
+        self.casePlanPath = casePlanPath
+        self.suite = suite
+        self.filters = filters
+        self.exclusions = exclusions
         let size = captureConfiguration.resolution.pixelSize
         self.capture = Capture(
             frameRate: captureConfiguration.frameRate,
+            timeoutSeconds: timeoutSeconds,
             width: Int(size.width),
             height: Int(size.height),
             horizontalMargin: horizontalMargin,

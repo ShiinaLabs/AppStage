@@ -7,6 +7,7 @@ final class StageBatchSnapshotWorkflow {
     typealias CapturePoint = @MainActor (StageScenarioID, StageCapturePointID, URL) async throws -> Void
 
     private struct Item: Codable {
+        let caseID: String
         let scenarioID: String
         let capturePointID: String
         let output: String
@@ -21,6 +22,11 @@ final class StageBatchSnapshotWorkflow {
         let verticalMargin: Double
         let includesWindowShadow: Bool
         let includesDemoCursor: Bool
+        let timeoutSeconds: Int
+        let casePlanPath: String?
+        let suite: String?
+        let filters: [String]
+        let exclusions: [String]
         var status: String
         var items: [Item]
     }
@@ -33,6 +39,12 @@ final class StageBatchSnapshotWorkflow {
     private let verticalMargin: Double
     private let includesWindowShadow: Bool
     private let includesDemoCursor: Bool
+    private let timeoutSeconds: Int
+    private let casePlan: StageCasePlan?
+    private let casePlanPath: String?
+    private let suite: String?
+    private let filters: [String]
+    private let exclusions: [String]
 
     init(
         discoverScenarios: @escaping DiscoverScenarios,
@@ -42,7 +54,13 @@ final class StageBatchSnapshotWorkflow {
         horizontalMargin: Double,
         verticalMargin: Double,
         includesWindowShadow: Bool,
-        includesDemoCursor: Bool
+        includesDemoCursor: Bool,
+        timeoutSeconds: Int = 30,
+        casePlan: StageCasePlan? = nil,
+        casePlanPath: String? = nil,
+        suite: String? = nil,
+        filters: [String] = [],
+        exclusions: [String] = []
     ) {
         self.discoverScenarios = discoverScenarios
         self.capturePoint = capturePoint
@@ -52,23 +70,36 @@ final class StageBatchSnapshotWorkflow {
         self.verticalMargin = verticalMargin
         self.includesWindowShadow = includesWindowShadow
         self.includesDemoCursor = includesDemoCursor
+        self.timeoutSeconds = timeoutSeconds
+        self.casePlan = casePlan
+        self.casePlanPath = casePlanPath
+        self.suite = suite
+        self.filters = filters
+        self.exclusions = exclusions
     }
 
     func run() async throws {
-        try prepareOutputDirectory()
         let scenarios = try await discoverScenarios()
-        let entries = try scenarios.flatMap { scenario in
-            try scenario.capturePointIDs.map { pointID in
-                let scenarioBase = try StageCaptureOutputNaming.fileName(for: scenario.id)
-                    .replacingOccurrences(of: ".mov", with: "")
-                let pointBase = try StageCaptureOutputNaming.fileName(for: StageScenarioID(pointID.rawValue))
-                    .replacingOccurrences(of: ".mov", with: "")
-                return (scenario, pointID, "\(scenarioBase)--\(pointBase).png")
-            }
+        let selectedCases = try StageCasePlan.select(
+            from: scenarios,
+            using: casePlan,
+            kind: .capturePoint,
+            suite: suite,
+            includes: filters,
+            excludes: exclusions
+        )
+        let entries = try selectedCases.map { selectedCase in
+            let scenarioBase = try StageCaptureOutputNaming.fileName(for: selectedCase.scenario.id)
+                .replacingOccurrences(of: ".mov", with: "")
+            let pointID = selectedCase.capturePointID!
+            let pointBase = try StageCaptureOutputNaming.fileName(for: StageScenarioID(pointID.rawValue))
+                .replacingOccurrences(of: ".mov", with: "")
+            return (selectedCase, "\(scenarioBase)--\(pointBase).png")
         }
         guard !entries.isEmpty else { throw StageBatchSnapshotError.noCapturePoints }
+        try prepareOutputDirectory()
         var collisionKeys = Set<String>()
-        for (_, _, fileName) in entries {
+        for (_, fileName) in entries {
             guard collisionKeys.insert(StageCaptureOutputNaming.collisionKey(for: fileName)).inserted else {
                 throw StageBatchRecordError.filenameCollision(fileName)
             }
@@ -76,15 +107,27 @@ final class StageBatchSnapshotWorkflow {
 
         let manifestURL = outputDirectory.appendingPathComponent("manifest.json")
         var manifest = Manifest(
-            schemaVersion: 1,
+            schemaVersion: 2,
             bundleIdentifier: bundleIdentifier,
             horizontalMargin: horizontalMargin,
             verticalMargin: verticalMargin,
             includesWindowShadow: includesWindowShadow,
             includesDemoCursor: includesDemoCursor,
+            timeoutSeconds: timeoutSeconds,
+            casePlanPath: casePlanPath,
+            suite: suite ?? casePlan?.defaultSuite,
+            filters: filters,
+            exclusions: exclusions,
             status: "running",
-            items: entries.map { scenario, pointID, fileName in
-                Item(scenarioID: scenario.id.rawValue, capturePointID: pointID.rawValue, output: fileName, status: "pending", error: nil)
+            items: entries.map { selectedCase, fileName in
+                Item(
+                    caseID: selectedCase.id,
+                    scenarioID: selectedCase.scenario.id.rawValue,
+                    capturePointID: selectedCase.capturePointID!.rawValue,
+                    output: fileName,
+                    status: "pending",
+                    error: nil
+                )
             }
         )
         try write(manifest, to: manifestURL)
@@ -93,12 +136,12 @@ final class StageBatchSnapshotWorkflow {
         for (index, entry) in entries.enumerated() {
             manifest.items[index].status = "capturing"
             try write(manifest, to: manifestURL)
-            let outputURL = outputDirectory.appendingPathComponent(entry.2)
+            let outputURL = outputDirectory.appendingPathComponent(entry.1)
             do {
                 try Task.checkCancellation()
-                try await capturePoint(entry.0.id, entry.1, outputURL)
+                try await capturePoint(entry.0.scenario.id, entry.0.capturePointID!, outputURL)
                 manifest.items[index].status = "completed"
-                print("Completed: \(entry.2)")
+                print("Completed: \(entry.1)")
             } catch is CancellationError {
                 try? FileManager.default.removeItem(at: outputURL)
                 manifest.items[index].status = "cancelled"
@@ -110,7 +153,7 @@ final class StageBatchSnapshotWorkflow {
                 failures += 1
                 manifest.items[index].status = "failed"
                 manifest.items[index].error = error.localizedDescription
-                print("Failed: \(entry.0.id.rawValue) / \(entry.1.rawValue): \(error.localizedDescription)")
+                print("Failed: \(entry.0.scenario.id.rawValue) / \(entry.0.capturePointID!.rawValue): \(error.localizedDescription)")
             }
             try write(manifest, to: manifestURL)
         }

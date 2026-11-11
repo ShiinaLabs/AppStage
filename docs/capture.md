@@ -88,6 +88,72 @@ appstage capture-all --app "/Applications/Example.app" \
   --transparent-background --output-dir ./Artifacts/batch
 ```
 
+## Case plans and suites
+
+A versioned JSON case plan lets a Host's reusable Scenario and capture point IDs
+be selected without a wrapper script. Cases only reference Host declarations;
+the Host still owns Scenario behavior, product data, static UI preparation, and
+business assertions.
+
+```json
+{
+  "schemaVersion": 1,
+  "cases": [
+    { "id": "overview", "scenarioID": "overview" },
+    { "id": "settings", "scenarioID": "settings" },
+    { "id": "overview-summary", "scenarioID": "overview", "capturePointID": "summary" }
+  ],
+  "suites": {
+    "recordings": ["overview", "settings"],
+    "snapshots": ["overview-summary"],
+    "smoke": ["overview"]
+  },
+  "defaults": {
+    "captureAll": {
+      "outputDirectory": "./Artifacts/movies",
+      "timeoutSeconds": 45,
+      "frameRate": 30,
+      "transparentBackground": true
+    },
+    "captureAllSnapshots": {
+      "outputDirectory": "./Artifacts/snapshots",
+      "includeWindowShadow": true
+    },
+    "verify": {
+      "outputDirectory": "./Artifacts/verify",
+      "iterations": 3,
+      "retainMovies": "failures"
+    }
+  }
+}
+```
+
+Save it as `appstage-cases.json`. Relative output and background image paths in
+the plan resolve from that file's directory. Each batch command selects a suite
+whose cases match its target type:
+
+```sh
+appstage capture-all --app "/Applications/Example.app" \
+  --config ./appstage-cases.json --suite recordings
+appstage capture-all --app "/Applications/Example.app" \
+  --config ./appstage-cases.json --suite recordings --filter 'over*' --exclude '*settings*'
+appstage capture-all-snapshots --app "/Applications/Example.app" \
+  --config ./appstage-cases.json --suite snapshots
+appstage verify --app "/Applications/Example.app" \
+  --config ./appstage-cases.json --suite smoke --iterations 5
+```
+
+Repeat `--filter` and `--exclude` to provide multiple `*` / `?` glob patterns.
+Include patterns are ORed, then excluded matches are removed; filtering preserves
+suite order and cannot add cases. Configured values are defaults; explicit CLI
+options take precedence. Use `--no-transparent-background`, `--no-background-image`,
+`--no-window-shadow`, and `--no-demo-cursor` to turn off corresponding enabled
+configuration defaults. The selected order is explicit `--suite`, then
+`defaultSuite`, then the case list order. A suite may contain Scenario cases for `capture-all` and
+`verify`, or capture point cases for `capture-all-snapshots`; selecting a case of
+the wrong kind, an unknown Host reference, or no cases is an error before output
+is created. Without a case plan, batch commands keep running all discovered items.
+
 ## Reliability verification
 
 ```sh
@@ -117,8 +183,10 @@ failed recordings are kept when available.
 
 Each invocation creates a timestamped `run-*` directory containing
 `summary.json`, `summary.txt`, and per-scenario `attempt-*` folders with
-`result.json`, `trace.json`, and `recording.mov`. Failed attempts also include
-`diagnostics.json`.
+`result.json`, `trace.json`, and `recording.mov`. `summary.json` uses schema
+version 2 and records the plan path, selected suite and case IDs, filters, and
+effective timeout, retention, and video output settings. Failed attempts also
+include `diagnostics.json`.
 
 Control Protocol v4 does not report Host-internal condition IDs or detailed AX
 snapshots. The current report marks those telemetry sources unavailable rather
@@ -163,9 +231,12 @@ clip over a high-contrast background before delivery.
 
 ## Manifest and failures
 
-`manifest.json` uses schema version 1 and is updated as the batch proceeds. It
-records each Scenario as `pending`, `recording`, `completed`, `failed`, or
-`cancelled`, plus the batch status.
+Recording and snapshot `manifest.json` files use schema version 2 and are
+updated as the batch proceeds. They record the case plan path, selected suite,
+filter patterns, and each selected case ID alongside its Host target and status.
+Recording entries use `pending`, `recording`, `completed`, `failed`, or
+`cancelled`; snapshot entries use `pending`, `capturing`, `completed`, `failed`,
+or `cancelled`.
 
 Batch capture fails fast. If a Scenario fails, its incomplete MOV is removed,
 previously completed MOVs are retained, and later Scenarios remain pending. On

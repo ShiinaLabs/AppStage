@@ -14,8 +14,14 @@ final class StageBatchRecordWorkflow {
     private let manifestURL: URL
     private let bundleIdentifier: String
     private let captureConfiguration: StageCaptureConfiguration
+    private let timeoutSeconds: Int
     private let horizontalMargin: Double
     private let verticalMargin: Double
+    private let casePlan: StageCasePlan?
+    private let casePlanPath: String?
+    private let suite: String?
+    private let filters: [String]
+    private let exclusions: [String]
 
     init(
         discoverScenarios: @escaping DiscoverScenarios,
@@ -23,8 +29,14 @@ final class StageBatchRecordWorkflow {
         outputDirectory: URL,
         bundleIdentifier: String,
         captureConfiguration: StageCaptureConfiguration,
+        timeoutSeconds: Int = 30,
         horizontalMargin: Double,
-        verticalMargin: Double
+        verticalMargin: Double,
+        casePlan: StageCasePlan? = nil,
+        casePlanPath: String? = nil,
+        suite: String? = nil,
+        filters: [String] = [],
+        exclusions: [String] = []
     ) {
         self.discoverScenarios = discoverScenarios
         self.recordScenario = recordScenario
@@ -32,27 +44,47 @@ final class StageBatchRecordWorkflow {
         self.manifestURL = outputDirectory.standardizedFileURL.appendingPathComponent("manifest.json")
         self.bundleIdentifier = bundleIdentifier
         self.captureConfiguration = captureConfiguration
+        self.timeoutSeconds = timeoutSeconds
         self.horizontalMargin = horizontalMargin
         self.verticalMargin = verticalMargin
+        self.casePlan = casePlan
+        self.casePlanPath = casePlanPath
+        self.suite = suite
+        self.filters = filters
+        self.exclusions = exclusions
     }
 
     func run() async throws {
         var manifest: StageCaptureManifest?
         var activeScenarioIndex: Int?
         do {
+            let discoveredScenarios = try await discoverScenarios()
+            let selectedCases = try StageCasePlan.select(
+                from: discoveredScenarios,
+                using: casePlan,
+                kind: .scenario,
+                suite: suite,
+                includes: filters,
+                excludes: exclusions
+            )
+            let preflight = try preflight(selectedCases)
             try prepareOutputDirectory()
-            let scenarios = try await discoverScenarios()
-            let preflight = try preflight(scenarios)
             manifest = StageCaptureManifest(
                 bundleIdentifier: bundleIdentifier,
                 captureConfiguration: captureConfiguration,
+                timeoutSeconds: timeoutSeconds,
                 horizontalMargin: horizontalMargin,
                 verticalMargin: verticalMargin,
-                scenarios: preflight.map { metadata, fileName in
+                casePlanPath: casePlanPath,
+                suite: suite ?? casePlan?.defaultSuite,
+                filters: filters,
+                exclusions: exclusions,
+                scenarios: preflight.map { selectedCase, fileName in
                     StageCaptureManifest.Scenario(
-                        id: metadata.id.rawValue,
-                        displayName: metadata.displayName,
-                        declaredDurationMilliseconds: metadata.durationMilliseconds,
+                        caseID: selectedCase.id,
+                        id: selectedCase.scenario.id.rawValue,
+                        displayName: selectedCase.scenario.displayName,
+                        declaredDurationMilliseconds: selectedCase.scenario.durationMilliseconds,
                         output: fileName,
                         status: .pending,
                         error: nil
@@ -60,16 +92,16 @@ final class StageBatchRecordWorkflow {
                 }
             )
             try manifest?.write(to: manifestURL)
-            print("Found \(scenarios.count) scenarios.")
+            print("Found \(selectedCases.count) cases.")
 
             for (index, item) in preflight.enumerated() {
                 activeScenarioIndex = index
                 manifest?.scenarios[index].status = .recording
                 try manifest?.write(to: manifestURL)
-                print("[\(index + 1)/\(preflight.count)] \(item.metadata.id.rawValue)")
+                print("[\(index + 1)/\(preflight.count)] \(item.selectedCase.scenario.id.rawValue)")
                 print("Recording...")
                 let movieURL = outputDirectory.appendingPathComponent(item.fileName)
-                try await recordScenario(item.metadata.id, movieURL)
+                try await recordScenario(item.selectedCase.scenario.id, movieURL)
                 manifest?.scenarios[index].status = .completed
                 manifest?.scenarios[index].error = nil
                 try manifest?.write(to: manifestURL)
@@ -121,16 +153,17 @@ final class StageBatchRecordWorkflow {
     }
 
     private func preflight(
-        _ scenarios: [StageScenarioMetadata]
-    ) throws -> [(metadata: StageScenarioMetadata, fileName: String)] {
+        _ selectedCases: [StageCasePlan.SelectedCase]
+    ) throws -> [(selectedCase: StageCasePlan.SelectedCase, fileName: String)] {
         var identifiers = Set<StageScenarioID>()
         var collisionKeys = Set<String>()
-        var results: [(StageScenarioMetadata, String)] = []
-        for metadata in scenarios {
-            guard identifiers.insert(metadata.id).inserted else {
-                throw StageBatchRecordError.duplicateScenarioID(metadata.id.rawValue)
+        var results: [(StageCasePlan.SelectedCase, String)] = []
+        for selectedCase in selectedCases {
+            let scenario = selectedCase.scenario
+            guard identifiers.insert(scenario.id).inserted else {
+                throw StageBatchRecordError.duplicateScenarioID(scenario.id.rawValue)
             }
-            let fileName = try StageCaptureOutputNaming.fileName(for: metadata.id)
+            let fileName = try StageCaptureOutputNaming.fileName(for: scenario.id)
             let collisionKey = StageCaptureOutputNaming.collisionKey(for: fileName)
             guard collisionKeys.insert(collisionKey).inserted else {
                 throw StageBatchRecordError.filenameCollision(fileName)
@@ -139,7 +172,7 @@ final class StageBatchRecordWorkflow {
             guard !FileManager.default.fileExists(atPath: outputURL.path) else {
                 throw StageBatchRecordError.outputAlreadyExists(fileName)
             }
-            results.append((metadata, fileName))
+            results.append((selectedCase, fileName))
         }
         return results
     }

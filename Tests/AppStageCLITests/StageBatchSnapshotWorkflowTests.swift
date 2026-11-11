@@ -78,5 +78,70 @@ final class StageBatchSnapshotWorkflowTests: XCTestCase {
         let items = try XCTUnwrap(manifest["items"] as? [[String: Any]])
         XCTAssertEqual(items.map { $0["status"] as? String }, ["failed", "completed"])
         XCTAssertEqual(items.map { $0["output"] as? String }, ["overview--summary.png", "overview--details.png"])
+        XCTAssertEqual(manifest["schemaVersion"] as? Int, 2)
+        XCTAssertEqual(items.map { $0["caseID"] as? String }, ["overview/summary", "overview/details"])
+    }
+
+    func testCasePlanSelectionIsRecordedAndValidatedBeforeOutputDirectoryCreation() async throws {
+        let outputDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: outputDirectory) }
+        let scenarios = [StageScenarioMetadata(
+            id: StageScenarioID("overview"),
+            capturePointIDs: [StageCapturePointID("summary"), StageCapturePointID("details")]
+        )]
+        let plan = StageCasePlan(
+            cases: [StageCasePlan.Case(id: "overview-summary", scenarioID: "overview", capturePointID: "summary")],
+            suites: ["smoke": ["overview-summary"]]
+        )
+        var captured: [String] = []
+        let workflow = StageBatchSnapshotWorkflow(
+            discoverScenarios: { scenarios },
+            capturePoint: { _, pointID, outputURL in
+                captured.append(pointID.rawValue)
+                try Data("png".utf8).write(to: outputURL)
+            },
+            outputDirectory: outputDirectory,
+            bundleIdentifier: "example.app",
+            horizontalMargin: 12,
+            verticalMargin: 8,
+            includesWindowShadow: false,
+            includesDemoCursor: false,
+            casePlan: plan,
+            casePlanPath: "/tmp/suite.json",
+            suite: "smoke"
+        )
+        try await workflow.run()
+        XCTAssertEqual(captured, ["summary"])
+        let manifestData = try Data(contentsOf: outputDirectory.appendingPathComponent("manifest.json"))
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
+        XCTAssertEqual(manifest["casePlanPath"] as? String, "/tmp/suite.json")
+        XCTAssertEqual(manifest["suite"] as? String, "smoke")
+        let items = try XCTUnwrap(manifest["items"] as? [[String: Any]])
+        XCTAssertEqual(items.map { $0["caseID"] as? String }, ["overview-summary"])
+    }
+
+    func testInvalidCasePlanDoesNotCreateOutputDirectory() async throws {
+        let outputDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: outputDirectory) }
+        let workflow = StageBatchSnapshotWorkflow(
+            discoverScenarios: { [StageScenarioMetadata(id: StageScenarioID("overview"))] },
+            capturePoint: { _, _, _ in XCTFail("Capture must not start") },
+            outputDirectory: outputDirectory,
+            bundleIdentifier: "example.app",
+            horizontalMargin: 12,
+            verticalMargin: 8,
+            includesWindowShadow: false,
+            includesDemoCursor: false,
+            filters: ["no-match*"]
+        )
+        do {
+            try await workflow.run()
+            XCTFail("Expected empty selection to fail")
+        } catch {
+            XCTAssertEqual(error as? StageCasePlanError, .noMatchingCases)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outputDirectory.path))
     }
 }

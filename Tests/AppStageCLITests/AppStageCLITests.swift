@@ -156,6 +156,22 @@ final class AppStageCLITests: XCTestCase {
         XCTAssertFalse(batch.includeDemoCursor)
     }
 
+    func testBatchCommandsParseSuiteAndRepeatedGlobFilters() throws {
+        let command = try CaptureAllCommand.parse([
+            "--app", "/Applications/Example.app",
+            "--output-dir", "/tmp/captures",
+            "--config", "/tmp/appstage-cases.json",
+            "--suite", "smoke",
+            "--filter", "overview*",
+            "--filter", "settings?",
+            "--exclude", "*draft*",
+        ])
+        XCTAssertEqual(command.selection.config, "/tmp/appstage-cases.json")
+        XCTAssertEqual(command.selection.suite, "smoke")
+        XCTAssertEqual(command.selection.filter, ["overview*", "settings?"])
+        XCTAssertEqual(command.selection.exclude, ["*draft*"])
+    }
+
     func testRecordRejectsMissingRequiredArguments() throws {
         let result = try runCLI(["record"])
 

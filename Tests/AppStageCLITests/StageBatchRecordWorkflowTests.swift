@@ -24,7 +24,7 @@ final class StageBatchRecordWorkflowTests: XCTestCase {
         let manifestURL = directory.appendingPathComponent("manifest.json")
         let data = try Data(contentsOf: manifestURL)
         let manifest = try JSONDecoder().decode(StageCaptureManifest.self, from: data)
-        XCTAssertEqual(manifest.schemaVersion, 1)
+        XCTAssertEqual(manifest.schemaVersion, 2)
         XCTAssertEqual(manifest.status, .completed)
         XCTAssertEqual(manifest.capture.width, 1_920)
         XCTAssertEqual(manifest.capture.height, 1_080)
@@ -34,6 +34,42 @@ final class StageBatchRecordWorkflowTests: XCTestCase {
         XCTAssertNil(manifest.scenarios[0].error)
         XCTAssertNil(manifest.scenarios[1].displayName)
         XCTAssertNil(manifest.scenarios[1].declaredDurationMilliseconds)
+    }
+
+    func testCasePlanSelectsInSuiteOrderAndRecordsStableCaseIDs() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let log = BatchLog()
+        let scenarios = [
+            StageScenarioMetadata(id: StageScenarioID("first")),
+            StageScenarioMetadata(id: StageScenarioID("second")),
+        ]
+        let plan = StageCasePlan(
+            cases: [
+                StageCasePlan.Case(id: "case-first", scenarioID: "first", capturePointID: nil),
+                StageCasePlan.Case(id: "case-second", scenarioID: "second", capturePointID: nil),
+            ],
+            suites: ["smoke": ["case-second", "case-first"]]
+        )
+        let workflow = makeBatchWorkflow(
+            directory: directory,
+            log: log,
+            scenarios: scenarios,
+            casePlan: plan,
+            casePlanPath: "/tmp/cases.json",
+            suite: "smoke"
+        )
+        try await workflow.run()
+
+        XCTAssertEqual(log.values.filter { $0.hasPrefix("record:") }, ["record:second", "record:first"])
+        let manifest = try JSONDecoder().decode(
+            StageCaptureManifest.self,
+            from: Data(contentsOf: directory.appendingPathComponent("manifest.json"))
+        )
+        XCTAssertEqual(manifest.casePlanPath, "/tmp/cases.json")
+        XCTAssertEqual(manifest.suite, "smoke")
+        XCTAssertEqual(manifest.scenarios.map(\.caseID), ["case-second", "case-first"])
+        XCTAssertEqual(manifest.capture.timeoutSeconds, 30)
     }
 
     func testBatchFailureIsFailFastAndManifestRetainsCompletedFailedAndPending() async throws {
@@ -142,7 +178,10 @@ final class StageBatchRecordWorkflowTests: XCTestCase {
         log: BatchLog,
         scenarios: [StageScenarioMetadata],
         failScenario: String? = nil,
-        onRecord: (@MainActor (StageScenarioID) async throws -> Void)? = nil
+        onRecord: (@MainActor (StageScenarioID) async throws -> Void)? = nil,
+        casePlan: StageCasePlan? = nil,
+        casePlanPath: String? = nil,
+        suite: String? = nil
     ) -> StageBatchRecordWorkflow {
         let capture = try! StageCaptureConfiguration(
             framing: .desktopAroundWindow(horizontalMargin: 220, verticalMargin: 120),
@@ -162,7 +201,10 @@ final class StageBatchRecordWorkflowTests: XCTestCase {
             bundleIdentifier: "com.example.fixture",
             captureConfiguration: capture,
             horizontalMargin: 220,
-            verticalMargin: 120
+            verticalMargin: 120,
+            casePlan: casePlan,
+            casePlanPath: casePlanPath,
+            suite: suite
         )
     }
 }

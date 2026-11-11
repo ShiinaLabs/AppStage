@@ -319,15 +319,28 @@ struct CaptureAllSnapshotsCommand: AsyncParsableCommand {
     )
 
     @Option(name: .long, help: "Path to the target .app bundle.") var app: String
-    @Option(name: .customLong("output-dir"), help: "Directory for PNGs and manifest.json.") var outputDirectory: String
-    @Option(name: .long, help: "Timeout in seconds for each Host lifecycle step (default: 30).") var timeout = 30
-    @Option(name: .long, help: "Horizontal transparent margin around each app window in points.") var horizontalMargin = 220.0
-    @Option(name: .long, help: "Vertical transparent margin outside the window shadow in points.") var verticalMargin = 120.0
+    @Option(name: .customLong("output-dir"), help: "Directory for PNGs and manifest.json.") var outputDirectory: String?
+    @Option(name: .long, help: "Timeout in seconds for each Host lifecycle step.") var timeout: Int?
+    @Option(name: .long, help: "Horizontal transparent margin around each app window in points.") var horizontalMargin: Double?
+    @Option(name: .long, help: "Vertical transparent margin outside the window shadow in points.") var verticalMargin: Double?
     @Flag(name: .long, help: "Include the macOS window shadow with transparent padding.") var includeWindowShadow = false
+    @Flag(name: .customLong("no-window-shadow"), help: "Disable a window shadow enabled by the case plan.") var disableWindowShadow = false
     @Flag(name: .long, help: "Include the AppStage demo cursor overlay in each PNG.") var includeDemoCursor = false
+    @Flag(name: .customLong("no-demo-cursor"), help: "Disable a demo cursor enabled by the case plan.") var disableDemoCursor = false
+    @OptionGroup var selection: StageCaseSelectionArguments
     @Flag(name: .long, help: "Terminate an already running target app and launch a new controlled instance.") var replaceExisting = false
 
     func run() async throws {
+        let (casePlan, casePlanURL) = try selection.loadPlan()
+        let defaults = casePlan?.defaults?.captureAllSnapshots
+        guard let outputDirectory = outputDirectory ?? defaults?.outputDirectory else {
+            throw ValidationError("Provide --output-dir or configure defaults.captureAllSnapshots.outputDirectory.")
+        }
+        let timeout = self.timeout ?? defaults?.timeoutSeconds ?? 30
+        let horizontalMargin = self.horizontalMargin ?? defaults?.horizontalMargin ?? 220
+        let verticalMargin = self.verticalMargin ?? defaults?.verticalMargin ?? 120
+        let includeWindowShadow = !disableWindowShadow && (self.includeWindowShadow || defaults?.includeWindowShadow == true)
+        let includeDemoCursor = !disableDemoCursor && (self.includeDemoCursor || defaults?.includeDemoCursor == true)
         guard (1...600).contains(timeout) else { throw ValidationError("--timeout must be between 1 and 600 seconds.") }
         guard horizontalMargin.isFinite, verticalMargin.isFinite,
               horizontalMargin >= 0, verticalMargin >= 0 else {
@@ -339,7 +352,15 @@ struct CaptureAllSnapshotsCommand: AsyncParsableCommand {
               let bundleIdentifier = Bundle(url: appURL)?.bundleIdentifier, !bundleIdentifier.isEmpty else {
             throw ValidationError("--app must point to an app bundle with a bundle identifier.")
         }
-        let outputURL = URL(fileURLWithPath: outputDirectory).standardizedFileURL
+        let outputPath: String
+        if let explicitOutput = self.outputDirectory {
+            outputPath = (explicitOutput as NSString).expandingTildeInPath
+        } else if let casePlan, let casePlanURL {
+            outputPath = casePlan.resolvedPath(outputDirectory, relativeTo: casePlanURL)
+        } else {
+            outputPath = (outputDirectory as NSString).expandingTildeInPath
+        }
+        let outputURL = URL(fileURLWithPath: outputPath).standardizedFileURL
         let captureTask = Task { @MainActor in
             let workflow = StageBatchSnapshotWorkflow(
                 discoverScenarios: {
@@ -370,7 +391,13 @@ struct CaptureAllSnapshotsCommand: AsyncParsableCommand {
                 horizontalMargin: horizontalMargin,
                 verticalMargin: verticalMargin,
                 includesWindowShadow: includeWindowShadow,
-                includesDemoCursor: includeDemoCursor
+                includesDemoCursor: includeDemoCursor,
+                timeoutSeconds: timeout,
+                casePlan: casePlan,
+                casePlanPath: casePlanURL?.path,
+                suite: selection.suite,
+                filters: selection.filter,
+                exclusions: selection.exclude
             )
             try await workflow.run()
         }
@@ -566,31 +593,51 @@ struct CaptureAllCommand: AsyncParsableCommand {
     var bundleID: String?
 
     @Option(name: .customLong("output-dir"), help: "Directory for scenario MOVs and manifest.json.")
-    var outputDirectory: String
+    var outputDirectory: String?
 
     @Option(name: .long, help: "Background image used as the final video canvas.")
     var backgroundImage: String?
 
+    @Flag(name: .customLong("no-background-image"), help: "Disable a background image configured by the case plan.")
+    var disableBackgroundImage = false
+
     @Flag(name: .long, help: "Preserve transparency and encode ProRes 4444 MOVs.")
     var transparentBackground = false
 
-    @Option(name: .long, help: "Timeout in seconds for handshake, preparation, and each scenario (default: 30).")
-    var timeout: Int = 30
+    @Flag(name: .customLong("no-transparent-background"), help: "Disable transparency enabled by the case plan.")
+    var disableTransparentBackground = false
+
+    @Option(name: .long, help: "Timeout in seconds for handshake, preparation, and each scenario.")
+    var timeout: Int?
 
     @Option(name: .long, help: "Horizontal desktop margin in points.")
-    var horizontalMargin: Double = 220
+    var horizontalMargin: Double?
 
     @Option(name: .long, help: "Vertical desktop margin in points.")
-    var verticalMargin: Double = 120
+    var verticalMargin: Double?
 
     @Option(name: .long, help: "Output frame rate.")
-    var frameRate: Int = 60
+    var frameRate: Int?
+
+    @OptionGroup var selection: StageCaseSelectionArguments
 
     @Flag(name: .long, help: "Terminate an already running target app and launch a new controlled instance.")
     var replaceExisting = false
 
     func run() async throws {
-        if transparentBackground, backgroundImage != nil {
+        let (casePlan, casePlanURL) = try selection.loadPlan()
+        let defaults = casePlan?.defaults?.captureAll
+        guard let outputDirectory = outputDirectory ?? defaults?.outputDirectory else {
+            throw ValidationError("Provide --output-dir or configure defaults.captureAll.outputDirectory.")
+        }
+        let timeout = self.timeout ?? defaults?.timeoutSeconds ?? 30
+        let horizontalMargin = self.horizontalMargin ?? defaults?.horizontalMargin ?? 220
+        let verticalMargin = self.verticalMargin ?? defaults?.verticalMargin ?? 120
+        let frameRate = self.frameRate ?? defaults?.frameRate ?? 60
+        let transparentBackground = !disableTransparentBackground
+            && (self.transparentBackground || defaults?.transparentBackground == true)
+        let configuredBackgroundImage = disableBackgroundImage ? nil : (backgroundImage ?? defaults?.backgroundImage)
+        if transparentBackground, configuredBackgroundImage != nil {
             throw ValidationError("--transparent-background cannot be used with --background-image.")
         }
         guard (1...600).contains(timeout) else {
@@ -617,6 +664,18 @@ struct CaptureAllCommand: AsyncParsableCommand {
             throw ValidationError("--bundle-id must match the app bundle identifier (\(applicationBundleID)).")
         }
 
+        let backgroundImage: String?
+        if let configuredBackgroundImage {
+            if self.backgroundImage != nil {
+                backgroundImage = (configuredBackgroundImage as NSString).expandingTildeInPath
+            } else if let casePlan, let casePlanURL {
+                backgroundImage = casePlan.resolvedPath(configuredBackgroundImage, relativeTo: casePlanURL)
+            } else {
+                backgroundImage = (configuredBackgroundImage as NSString).expandingTildeInPath
+            }
+        } else {
+            backgroundImage = nil
+        }
         let canvas: StageCanvasConfiguration?
         if let backgroundImage {
             let backgroundURL = URL(fileURLWithPath: backgroundImage).standardizedFileURL
@@ -646,6 +705,14 @@ struct CaptureAllCommand: AsyncParsableCommand {
             throw ValidationError("Invalid capture configuration: \(error.localizedDescription)")
         }
 
+        let outputPath: String
+        if let explicitOutput = self.outputDirectory {
+            outputPath = (explicitOutput as NSString).expandingTildeInPath
+        } else if let casePlan, let casePlanURL {
+            outputPath = casePlan.resolvedPath(outputDirectory, relativeTo: casePlanURL)
+        } else {
+            outputPath = (outputDirectory as NSString).expandingTildeInPath
+        }
         let captureTask = Task { @MainActor in
             let workflow = StageBatchRecordWorkflow(
                 discoverScenarios: {
@@ -680,11 +747,17 @@ struct CaptureAllCommand: AsyncParsableCommand {
                         outputURL: movieURL
                     )
                 },
-                outputDirectory: URL(fileURLWithPath: outputDirectory).standardizedFileURL,
+                outputDirectory: URL(fileURLWithPath: outputPath).standardizedFileURL,
                 bundleIdentifier: applicationBundleID,
                 captureConfiguration: captureConfiguration,
+                timeoutSeconds: timeout,
                 horizontalMargin: horizontalMargin,
-                verticalMargin: verticalMargin
+                verticalMargin: verticalMargin,
+                casePlan: casePlan,
+                casePlanPath: casePlanURL?.path,
+                suite: selection.suite,
+                filters: selection.filter,
+                exclusions: selection.exclude
             )
             try await workflow.run()
         }
@@ -706,13 +779,23 @@ struct VerifyCommand: AsyncParsableCommand {
 
     @Option(name: .long, help: "Path to the target .app bundle.") var app: String
     @Option(name: .long, help: "Target app bundle identifier; defaults to the app bundle identifier.") var bundleID: String?
-    @Option(name: .long, help: "Independent recordings per scenario (default: 20).") var iterations = 20
-    @Option(name: .long, help: "Root output directory for this verification run.") var output: String = "~/Desktop/AppStage-Verify"
-    @Option(name: .long, help: "Timeout in seconds per Control/lifecycle phase (default: 60).") var timeout = 60
-    @Option(name: .long, help: "Movie retention policy: failures, all, or none (default: failures).") var retainMovies = "failures"
+    @Option(name: .long, help: "Independent recordings per scenario.") var iterations: Int?
+    @Option(name: .long, help: "Root output directory for this verification run.") var output: String?
+    @Option(name: .long, help: "Timeout in seconds per Control/lifecycle phase.") var timeout: Int?
+    @Option(name: .long, help: "Movie retention policy: failures, all, or none.") var retainMovies: String?
     @Flag(name: .long, help: "Preserve transparency and encode ProRes 4444 MOVs.") var transparentBackground = false
+    @Flag(name: .customLong("no-transparent-background"), help: "Disable transparency enabled by the case plan.") var disableTransparentBackground = false
+    @OptionGroup var selection: StageCaseSelectionArguments
 
     func run() async throws {
+        let (casePlan, casePlanURL) = try selection.loadPlan()
+        let defaults = casePlan?.defaults?.verify
+        let iterations = self.iterations ?? defaults?.iterations ?? 20
+        let output = self.output ?? defaults?.outputDirectory ?? "~/Desktop/AppStage-Verify"
+        let timeout = self.timeout ?? defaults?.timeoutSeconds ?? 60
+        let retainMovies = self.retainMovies ?? defaults?.retainMovies ?? "failures"
+        let transparentBackground = !disableTransparentBackground
+            && (self.transparentBackground || defaults?.transparentBackground == true)
         guard (1...1_000).contains(iterations) else { throw ValidationError("--iterations must be between 1 and 1000.") }
         guard (1...600).contains(timeout) else { throw ValidationError("--timeout must be between 1 and 600 seconds.") }
         guard ["failures", "all", "none"].contains(retainMovies) else {
@@ -727,10 +810,23 @@ struct VerifyCommand: AsyncParsableCommand {
         if let bundleID, bundleID != applicationBundleID {
             throw ValidationError("--bundle-id must match the app bundle identifier (\(applicationBundleID)).")
         }
+        let outputPath: String
+        if let explicitOutput = self.output {
+            outputPath = (explicitOutput as NSString).expandingTildeInPath
+        } else if let configuredOutput = defaults?.outputDirectory, let casePlan, let casePlanURL {
+            outputPath = casePlan.resolvedPath(configuredOutput, relativeTo: casePlanURL)
+        } else {
+            outputPath = (output as NSString).expandingTildeInPath
+        }
         try await performVerification(
             appURL: appURL, bundleIdentifier: applicationBundleID,
-            iterations: iterations, output: output, timeout: timeout, retainMovies: retainMovies,
-            videoOutputMode: transparentBackground ? .proRes4444Alpha : .h264
+            iterations: iterations, output: outputPath, timeout: timeout, retainMovies: retainMovies,
+            videoOutputMode: transparentBackground ? .proRes4444Alpha : .h264,
+            casePlan: casePlan,
+            casePlanPath: casePlanURL?.path,
+            suite: selection.suite,
+            filters: selection.filter,
+            exclusions: selection.exclude
         )
     }
 }
@@ -782,7 +878,12 @@ private func performVerification(
     output: String,
     timeout: Int,
     retainMovies: String,
-    videoOutputMode: StageVideoOutputMode
+    videoOutputMode: StageVideoOutputMode,
+    casePlan: StageCasePlan?,
+    casePlanPath: String?,
+    suite: String?,
+    filters: [String],
+    exclusions: [String]
 ) async throws {
         let root = URL(fileURLWithPath: (output as NSString).expandingTildeInPath).standardizedFileURL
         let formatter = DateFormatter()
@@ -790,7 +891,6 @@ private func performVerification(
         formatter.timeZone = TimeZone.current
         formatter.dateFormat = "yyyy-MM-dd-HHmmss"
         let runDirectory = root.appendingPathComponent("run-\(formatter.string(from: Date()))", isDirectory: true)
-        try FileManager.default.createDirectory(at: runDirectory, withIntermediateDirectories: true)
 
         let captureConfiguration = try StageCaptureConfiguration(
             framing: .desktopAroundWindow(horizontalMargin: 100, verticalMargin: 50),
@@ -801,16 +901,25 @@ private func performVerification(
             appURL: appURL, bundleIdentifier: applicationBundleID,
             captureConfiguration: captureConfiguration, timeout: .seconds(timeout)
         )
-        let scenarios: [StageScenarioMetadata]
+        let discoveredScenarios: [StageScenarioMetadata]
         do {
-            scenarios = try await discovery.runDiscovery(
+            discoveredScenarios = try await discovery.runDiscovery(
                 bundleIdentifier: applicationBundleID, token: token, sessionID: sessionID,
                 timeout: .seconds(timeout), existingApplicationPolicy: .reject
             )
         } catch {
             let setupFailure = error.localizedDescription
+            try FileManager.default.createDirectory(at: runDirectory, withIntermediateDirectories: true)
             let summary = StageVerifySummary(
-                generatedAt: Date(), iterationsRequested: iterations, attemptsTotal: 0,
+                schemaVersion: 2,
+                configuration: StageVerifyConfigurationSummary(
+                    timeoutSeconds: timeout,
+                    retainMovies: retainMovies,
+                    videoOutputMode: videoOutputMode.rawValue
+                ),
+                generatedAt: Date(), casePlanPath: casePlanPath,
+                suite: suite ?? casePlan?.defaultSuite, filters: filters, exclusions: exclusions,
+                selectedCases: [], iterationsRequested: iterations, attemptsTotal: 0,
                 passed: 0, failed: 0, perScenario: [:], failureCountsByPhase: ["scenarioDiscovery": 1],
                 maxControlConnectDuration: nil, maxPrepareDuration: nil, maxFinalizeDuration: nil,
                 orphanProcessCount: 0, cleanupFailureCount: 0, determinismWarnings: [],
@@ -823,6 +932,17 @@ private func performVerification(
             try summaryText(summary).write(to: runDirectory.appendingPathComponent("summary.txt"), atomically: true, encoding: .utf8)
             throw ValidationError("Scenario discovery failed: \(error.localizedDescription)")
         }
+
+        let selectedCases = try StageCasePlan.select(
+            from: discoveredScenarios,
+            using: casePlan,
+            kind: .scenario,
+            suite: suite,
+            includes: filters,
+            excludes: exclusions
+        )
+        let scenarios = selectedCases.map(\.scenario)
+        try FileManager.default.createDirectory(at: runDirectory, withIntermediateDirectories: true)
 
         var attempts: [StageVerifyAttempt] = []
         var semanticSequences: [String: [String]] = [:]
@@ -976,7 +1096,16 @@ private func performVerification(
             attempts.flatMap(\.events).filter { $0.phase == phase }.compactMap(\.durationMilliseconds).map { Double($0) / 1_000 }.max()
         }
         let summary = StageVerifySummary(
-            generatedAt: Date(), iterationsRequested: iterations, attemptsTotal: attempts.count,
+            schemaVersion: 2,
+            configuration: StageVerifyConfigurationSummary(
+                timeoutSeconds: timeout,
+                retainMovies: retainMovies,
+                videoOutputMode: videoOutputMode.rawValue
+            ),
+            generatedAt: Date(), casePlanPath: casePlanPath,
+            suite: suite ?? casePlan?.defaultSuite, filters: filters, exclusions: exclusions,
+            selectedCases: selectedCases.map(\.id),
+            iterationsRequested: iterations, attemptsTotal: attempts.count,
             passed: attempts.filter { $0.status == "pass" }.count,
             failed: attempts.filter { $0.status == "fail" }.count,
             perScenario: perScenario, failureCountsByPhase: failures,
