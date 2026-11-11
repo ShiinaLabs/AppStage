@@ -41,7 +41,9 @@ appstage verify --app "/Applications/Example.app" \
 
 ## Requirements
 
-macOS 14 or later, Screen Recording permission, and Accessibility permission for real AX interaction.
+macOS 26 or later. Building from source requires Swift tools 6.2 or later.
+Screen Recording permission is required for capture, and Accessibility
+permission is required for real AX interaction.
 
 ## License
 

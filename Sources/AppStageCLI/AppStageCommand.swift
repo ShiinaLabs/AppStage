@@ -1109,17 +1109,46 @@ private func capturePNG(
     } else {
         cursorWindows = []
     }
-    let shadowPadding = includeWindowShadow ? 40.0 : 0.0
-    let image = try await StageScreenshot.capture(
-        window: window,
-        display: display,
-        framing: .desktopAroundWindow(
-            horizontalMargin: CGFloat(horizontalMargin + shadowPadding),
-            verticalMargin: CGFloat(verticalMargin + shadowPadding)
-        ),
-        includesWindowShadow: includeWindowShadow,
-        includingWindows: cursorWindows
-    )
+    let capturedImage: CGImage
+    let imageScale: CGFloat
+    let usesNativeWindowCapture = includeWindowShadow && !includeDemoCursor
+    if usesNativeWindowCapture {
+        let displayScale = await MainActor.run {
+            _ = NSApplication.shared.setActivationPolicy(.prohibited)
+            return NSScreen.screens.first {
+                $0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID == display.displayID
+            }?.backingScaleFactor
+        }
+        guard let displayScale else {
+            throw ValidationError("Could not determine the backing scale of the captured display.")
+        }
+        imageScale = displayScale
+        capturedImage = try await StageScreenshot.captureNativeWindow(
+            window: window,
+            includesWindowShadow: true
+        )
+    } else {
+        imageScale = 1
+        let shadowPadding = includeWindowShadow ? 40.0 : 0.0
+        capturedImage = try await StageScreenshot.capture(
+            window: window,
+            display: display,
+            framing: .desktopAroundWindow(
+                horizontalMargin: CGFloat(horizontalMargin + shadowPadding),
+                verticalMargin: CGFloat(verticalMargin + shadowPadding)
+            ),
+            includesWindowShadow: includeWindowShadow,
+            includingWindows: cursorWindows
+        )
+    }
+    let image = usesNativeWindowCapture
+        ? try StageScreenshot.addingTransparentPadding(
+            around: capturedImage,
+            horizontalMargin: CGFloat(horizontalMargin),
+            verticalMargin: CGFloat(verticalMargin),
+            scale: imageScale
+        )
+        : capturedImage
     do {
         try StageScreenshot.writePNG(image, to: outputURL)
     } catch {

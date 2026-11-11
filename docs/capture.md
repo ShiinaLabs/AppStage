@@ -35,10 +35,14 @@ The batch command writes a PNG and manifest entry for each point. It continues
 after an individual failure and exits unsuccessfully after writing the final
 manifest if any point failed. All PNG commands accept `--horizontal-margin` and
 `--vertical-margin` for transparent padding outside the captured window. Add
-`--include-window-shadow` to preserve the macOS shadow and reserve 40 points for
-it. Add `--include-demo-cursor` to capture the AppStage cursor overlay window;
-the Host must show the cursor at the requested capture point. These two flags
-are available on both `snapshot` and the controlled screenshot commands.
+`--include-window-shadow` to use ScreenCaptureKit's single-window screenshot
+path, preserving the system-rendered shadow and its native transparent bounds;
+the margin flags add empty transparent padding outside that image. Add
+`--include-demo-cursor` to capture the AppStage cursor overlay window; the Host
+must show the cursor at the requested capture point. When both options are set,
+AppStage uses display capture so it can include the separate overlay window.
+These flags are available on both `snapshot` and the controlled screenshot
+commands.
 
 ## Single recording
 
