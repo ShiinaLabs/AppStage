@@ -231,6 +231,9 @@ struct SnapshotCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Include the macOS window shadow with transparent padding.")
     var includeWindowShadow = false
 
+    @Flag(name: .long, help: "Capture the window at its native screenshot size without transparent margins.")
+    var nativeSize = false
+
     @Flag(name: .long, help: "Include the AppStage demo cursor overlay in the PNG.")
     var includeDemoCursor = false
 
@@ -251,6 +254,7 @@ struct SnapshotCommand: AsyncParsableCommand {
             horizontalMargin: horizontalMargin,
             verticalMargin: verticalMargin,
             includeWindowShadow: includeWindowShadow,
+            nativeSize: nativeSize,
             includeDemoCursor: includeDemoCursor
         )
         print("Wrote \(image.width)×\(image.height) PNG to \(outputURL.path)")
@@ -268,9 +272,10 @@ struct CaptureSnapshotCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Host-declared static capture point identifier.") var checkpoint: String
     @Option(name: .long, help: "PNG output path.") var output: String
     @Option(name: .long, help: "Timeout in seconds for connection, preparation, and capture point (default: 30).") var timeout = 30
-    @Option(name: .long, help: "Horizontal transparent margin around the app window in points.") var horizontalMargin = 220.0
-    @Option(name: .long, help: "Vertical transparent margin outside the window shadow in points.") var verticalMargin = 120.0
+    @Option(name: .long, help: "Horizontal transparent margin around the app window in points; ignored with --native-size.") var horizontalMargin = 220.0
+    @Option(name: .long, help: "Vertical transparent margin outside the window shadow in points; ignored with --native-size.") var verticalMargin = 120.0
     @Flag(name: .long, help: "Include the macOS window shadow with transparent padding.") var includeWindowShadow = false
+    @Flag(name: .long, help: "Capture the window at its native screenshot size without transparent margins.") var nativeSize = false
     @Flag(name: .long, help: "Include the AppStage demo cursor overlay in the PNG.") var includeDemoCursor = false
     @Flag(name: .long, help: "Terminate an already running target app and launch a new controlled instance.") var replaceExisting = false
 
@@ -279,6 +284,9 @@ struct CaptureSnapshotCommand: AsyncParsableCommand {
         guard horizontalMargin.isFinite, verticalMargin.isFinite,
               horizontalMargin >= 0, verticalMargin >= 0 else {
             throw ValidationError("Capture margins must be finite, non-negative numbers.")
+        }
+        guard !nativeSize || !includeDemoCursor else {
+            throw ValidationError("--native-size cannot be combined with --include-demo-cursor.")
         }
         guard !scenario.isEmpty, !checkpoint.isEmpty else {
             throw ValidationError("--scenario and --checkpoint must not be empty.")
@@ -306,6 +314,7 @@ struct CaptureSnapshotCommand: AsyncParsableCommand {
             horizontalMargin: horizontalMargin,
             verticalMargin: verticalMargin,
             includeWindowShadow: includeWindowShadow,
+            nativeSize: nativeSize,
             includeDemoCursor: includeDemoCursor,
             policy: replaceExisting ? .replace : .reject
         )
@@ -325,6 +334,8 @@ struct CaptureAllSnapshotsCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Vertical transparent margin outside the window shadow in points.") var verticalMargin: Double?
     @Flag(name: .long, help: "Include the macOS window shadow with transparent padding.") var includeWindowShadow = false
     @Flag(name: .customLong("no-window-shadow"), help: "Disable a window shadow enabled by the case plan.") var disableWindowShadow = false
+    @Flag(name: .long, help: "Capture each window at its native screenshot size without transparent margins.") var nativeSize = false
+    @Flag(name: .customLong("no-native-size"), help: "Disable native-size screenshots enabled by the case plan.") var disableNativeSize = false
     @Flag(name: .long, help: "Include the AppStage demo cursor overlay in each PNG.") var includeDemoCursor = false
     @Flag(name: .customLong("no-demo-cursor"), help: "Disable a demo cursor enabled by the case plan.") var disableDemoCursor = false
     @OptionGroup var selection: StageCaseSelectionArguments
@@ -340,7 +351,11 @@ struct CaptureAllSnapshotsCommand: AsyncParsableCommand {
         let horizontalMargin = self.horizontalMargin ?? defaults?.horizontalMargin ?? 220
         let verticalMargin = self.verticalMargin ?? defaults?.verticalMargin ?? 120
         let includeWindowShadow = !disableWindowShadow && (self.includeWindowShadow || defaults?.includeWindowShadow == true)
+        let nativeSize = !disableNativeSize && (self.nativeSize || defaults?.nativeSize == true)
         let includeDemoCursor = !disableDemoCursor && (self.includeDemoCursor || defaults?.includeDemoCursor == true)
+        guard !nativeSize || !includeDemoCursor else {
+            throw ValidationError("--native-size cannot be combined with --include-demo-cursor.")
+        }
         guard (1...600).contains(timeout) else { throw ValidationError("--timeout must be between 1 and 600 seconds.") }
         guard horizontalMargin.isFinite, verticalMargin.isFinite,
               horizontalMargin >= 0, verticalMargin >= 0 else {
@@ -382,15 +397,17 @@ struct CaptureAllSnapshotsCommand: AsyncParsableCommand {
                     horizontalMargin: horizontalMargin,
                     verticalMargin: verticalMargin,
                     includeWindowShadow: includeWindowShadow,
+                    nativeSize: nativeSize,
                     includeDemoCursor: includeDemoCursor,
                     policy: replaceExisting ? .replace : .reject
                 )
             },
                 outputDirectory: outputURL,
                 bundleIdentifier: bundleIdentifier,
-                horizontalMargin: horizontalMargin,
-                verticalMargin: verticalMargin,
+                horizontalMargin: nativeSize ? 0 : horizontalMargin,
+                verticalMargin: nativeSize ? 0 : verticalMargin,
                 includesWindowShadow: includeWindowShadow,
+                nativeSize: nativeSize,
                 includesDemoCursor: includeDemoCursor,
                 timeoutSeconds: timeout,
                 casePlan: casePlan,
@@ -1223,8 +1240,12 @@ private func capturePNG(
     horizontalMargin: Double,
     verticalMargin: Double,
     includeWindowShadow: Bool,
+    nativeSize: Bool,
     includeDemoCursor: Bool
 ) async throws -> CGImage {
+    guard !nativeSize || !includeDemoCursor else {
+        throw ValidationError("--native-size cannot be combined with --include-demo-cursor.")
+    }
     let cursorWindows: [StageCaptureWindow]
     if includeDemoCursor {
         let matchingWindows = try await StageCaptureDiscovery.windows(
@@ -1238,46 +1259,57 @@ private func capturePNG(
     } else {
         cursorWindows = []
     }
-    let capturedImage: CGImage
-    let imageScale: CGFloat
-    let usesNativeWindowCapture = includeWindowShadow && !includeDemoCursor
-    if usesNativeWindowCapture {
-        let displayScale = await MainActor.run {
+    let image: CGImage
+    if nativeSize {
+        await MainActor.run {
             _ = NSApplication.shared.setActivationPolicy(.prohibited)
-            return NSScreen.screens.first {
-                $0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID == display.displayID
-            }?.backingScaleFactor
         }
-        guard let displayScale else {
-            throw ValidationError("Could not determine the backing scale of the captured display.")
-        }
-        imageScale = displayScale
-        capturedImage = try await StageScreenshot.captureNativeWindow(
+        image = try await StageScreenshot.captureNativeWindow(
             window: window,
-            includesWindowShadow: true
+            includesWindowShadow: includeWindowShadow
         )
     } else {
-        imageScale = 1
-        let shadowPadding = includeWindowShadow ? 40.0 : 0.0
-        capturedImage = try await StageScreenshot.capture(
-            window: window,
-            display: display,
-            framing: .desktopAroundWindow(
-                horizontalMargin: CGFloat(horizontalMargin + shadowPadding),
-                verticalMargin: CGFloat(verticalMargin + shadowPadding)
-            ),
-            includesWindowShadow: includeWindowShadow,
-            includingWindows: cursorWindows
-        )
+        let capturedImage: CGImage
+        let imageScale: CGFloat
+        let usesNativeWindowCapture = includeWindowShadow && !includeDemoCursor
+        if usesNativeWindowCapture {
+            let displayScale = await MainActor.run {
+                _ = NSApplication.shared.setActivationPolicy(.prohibited)
+                return NSScreen.screens.first {
+                    $0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID == display.displayID
+                }?.backingScaleFactor
+            }
+            guard let displayScale else {
+                throw ValidationError("Could not determine the backing scale of the captured display.")
+            }
+            imageScale = displayScale
+            capturedImage = try await StageScreenshot.captureNativeWindow(
+                window: window,
+                includesWindowShadow: true
+            )
+        } else {
+            imageScale = 1
+            let shadowPadding = includeWindowShadow ? 40.0 : 0.0
+            capturedImage = try await StageScreenshot.capture(
+                window: window,
+                display: display,
+                framing: .desktopAroundWindow(
+                    horizontalMargin: CGFloat(horizontalMargin + shadowPadding),
+                    verticalMargin: CGFloat(verticalMargin + shadowPadding)
+                ),
+                includesWindowShadow: includeWindowShadow,
+                includingWindows: cursorWindows
+            )
+        }
+        image = usesNativeWindowCapture
+            ? try StageScreenshot.addingTransparentPadding(
+                around: capturedImage,
+                horizontalMargin: CGFloat(horizontalMargin),
+                verticalMargin: CGFloat(verticalMargin),
+                scale: imageScale
+            )
+            : capturedImage
     }
-    let image = usesNativeWindowCapture
-        ? try StageScreenshot.addingTransparentPadding(
-            around: capturedImage,
-            horizontalMargin: CGFloat(horizontalMargin),
-            verticalMargin: CGFloat(verticalMargin),
-            scale: imageScale
-        )
-        : capturedImage
     do {
         try StageScreenshot.writePNG(image, to: outputURL)
     } catch {
@@ -1344,6 +1376,7 @@ private func captureScenarioSnapshot(
     horizontalMargin: Double,
     verticalMargin: Double,
     includeWindowShadow: Bool,
+    nativeSize: Bool,
     includeDemoCursor: Bool,
     policy: StageExistingApplicationPolicy
 ) async throws {
@@ -1391,6 +1424,7 @@ private func captureScenarioSnapshot(
             horizontalMargin: horizontalMargin,
             verticalMargin: verticalMargin,
             includeWindowShadow: includeWindowShadow,
+            nativeSize: nativeSize,
             includeDemoCursor: includeDemoCursor
         )
         await controller.close()

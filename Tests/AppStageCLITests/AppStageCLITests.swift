@@ -132,6 +132,7 @@ final class AppStageCLITests: XCTestCase {
         XCTAssertTrue(result.standardOutput.contains("--bundle-id"))
         XCTAssertTrue(result.standardOutput.contains("--output"))
         XCTAssertTrue(result.standardOutput.contains("--include-window-shadow"))
+        XCTAssertTrue(result.standardOutput.contains("--native-size"))
         XCTAssertTrue(result.standardOutput.contains("--include-demo-cursor"))
     }
 
@@ -142,18 +143,29 @@ final class AppStageCLITests: XCTestCase {
             "--checkpoint", "summary",
             "--output", "/tmp/summary.png",
             "--include-window-shadow",
+            "--native-size",
             "--include-demo-cursor",
         ])
         XCTAssertTrue(single.includeWindowShadow)
+        XCTAssertTrue(single.nativeSize)
         XCTAssertTrue(single.includeDemoCursor)
 
         let batch = try CaptureAllSnapshotsCommand.parse([
             "--app", "/Applications/Example.app",
             "--output-dir", "/tmp/snapshots",
             "--include-window-shadow",
+            "--native-size",
         ])
         XCTAssertTrue(batch.includeWindowShadow)
+        XCTAssertTrue(batch.nativeSize)
         XCTAssertFalse(batch.includeDemoCursor)
+
+        let disabled = try CaptureAllSnapshotsCommand.parse([
+            "--app", "/Applications/Example.app",
+            "--output-dir", "/tmp/snapshots",
+            "--no-native-size",
+        ])
+        XCTAssertTrue(disabled.disableNativeSize)
     }
 
     func testBatchCommandsParseSuiteAndRepeatedGlobFilters() throws {

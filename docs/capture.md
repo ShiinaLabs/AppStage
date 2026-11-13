@@ -33,16 +33,23 @@ appstage capture-all-snapshots --app "/Applications/Example.app" \\
 
 The batch command writes a PNG and manifest entry for each point. It continues
 after an individual failure and exits unsuccessfully after writing the final
-manifest if any point failed. All PNG commands accept `--horizontal-margin` and
-`--vertical-margin` for transparent padding outside the captured window. Add
-`--include-window-shadow` to use ScreenCaptureKit's single-window screenshot
-path, preserving the system-rendered shadow and its native transparent bounds;
-the margin flags add empty transparent padding outside that image. Add
-`--include-demo-cursor` to capture the AppStage cursor overlay window; the Host
-must show the cursor at the requested capture point. When both options are set,
-AppStage uses display capture so it can include the separate overlay window.
-These flags are available on both `snapshot` and the controlled screenshot
-commands.
+manifest if any point failed. PNG commands use a fixed canvas with transparent
+margins by default. Add `--native-size` to write the system window screenshot at
+its native dimensions without extra margins; the margin options are ignored in
+this mode. For example:
+
+```sh
+appstage capture-snapshot --app "/Applications/Example.app" \
+  --scenario overview --checkpoint summary --native-size \
+  --include-window-shadow --output ./Artifacts/summary.png
+```
+
+`--include-window-shadow` controls whether the system-rendered shadow is included
+in those dimensions. Native-size screenshots cannot include the separate AppStage
+demo cursor overlay; omit `--include-demo-cursor` when using this mode. The mode
+is available on `snapshot` and the controlled screenshot commands, including
+`capture-all-snapshots`. Set `defaults.captureAllSnapshots.nativeSize` to `true`
+in a case plan to enable it for batch screenshots by default.
 
 ## Single recording
 
@@ -147,8 +154,8 @@ Repeat `--filter` and `--exclude` to provide multiple `*` / `?` glob patterns.
 Include patterns are ORed, then excluded matches are removed; filtering preserves
 suite order and cannot add cases. Configured values are defaults; explicit CLI
 options take precedence. Use `--no-transparent-background`, `--no-background-image`,
-`--no-window-shadow`, and `--no-demo-cursor` to turn off corresponding enabled
-configuration defaults. The selected order is explicit `--suite`, then
+`--no-window-shadow`, `--no-native-size`, and `--no-demo-cursor` to turn off
+corresponding enabled configuration defaults. The selected order is explicit `--suite`, then
 `defaultSuite`, then the case list order. A suite may contain Scenario cases for `capture-all` and
 `verify`, or capture point cases for `capture-all-snapshots`; selecting a case of
 the wrong kind, an unknown Host reference, or no cases is an error before output

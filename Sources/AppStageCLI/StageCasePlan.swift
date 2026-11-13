@@ -26,6 +26,7 @@ struct StageCasePlan: Decodable, Sendable {
             let horizontalMargin: Double?
             let verticalMargin: Double?
             let includeWindowShadow: Bool?
+            let nativeSize: Bool?
             let includeDemoCursor: Bool?
         }
 

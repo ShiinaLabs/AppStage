@@ -21,6 +21,7 @@ final class StageBatchSnapshotWorkflow {
         let horizontalMargin: Double
         let verticalMargin: Double
         let includesWindowShadow: Bool
+        let nativeSize: Bool
         let includesDemoCursor: Bool
         let timeoutSeconds: Int
         let casePlanPath: String?
@@ -38,6 +39,7 @@ final class StageBatchSnapshotWorkflow {
     private let horizontalMargin: Double
     private let verticalMargin: Double
     private let includesWindowShadow: Bool
+    private let nativeSize: Bool
     private let includesDemoCursor: Bool
     private let timeoutSeconds: Int
     private let casePlan: StageCasePlan?
@@ -54,6 +56,7 @@ final class StageBatchSnapshotWorkflow {
         horizontalMargin: Double,
         verticalMargin: Double,
         includesWindowShadow: Bool,
+        nativeSize: Bool = false,
         includesDemoCursor: Bool,
         timeoutSeconds: Int = 30,
         casePlan: StageCasePlan? = nil,
@@ -69,6 +72,7 @@ final class StageBatchSnapshotWorkflow {
         self.horizontalMargin = horizontalMargin
         self.verticalMargin = verticalMargin
         self.includesWindowShadow = includesWindowShadow
+        self.nativeSize = nativeSize
         self.includesDemoCursor = includesDemoCursor
         self.timeoutSeconds = timeoutSeconds
         self.casePlan = casePlan
@@ -114,6 +118,7 @@ final class StageBatchSnapshotWorkflow {
             horizontalMargin: horizontalMargin,
             verticalMargin: verticalMargin,
             includesWindowShadow: includesWindowShadow,
+            nativeSize: nativeSize,
             includesDemoCursor: includesDemoCursor,
             timeoutSeconds: timeoutSeconds,
             casePlanPath: casePlanPath,

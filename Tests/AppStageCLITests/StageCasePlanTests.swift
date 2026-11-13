@@ -117,6 +117,9 @@ final class StageCasePlanTests: XCTestCase {
               "timeoutSeconds": 45,
               "frameRate": 30,
               "transparentBackground": true
+            },
+            "captureAllSnapshots": {
+              "nativeSize": true
             }
           }
         }
@@ -124,6 +127,7 @@ final class StageCasePlanTests: XCTestCase {
 
         XCTAssertEqual(plan.defaults?.captureAll?.timeoutSeconds, 45)
         XCTAssertEqual(plan.defaults?.captureAll?.frameRate, 30)
+        XCTAssertEqual(plan.defaults?.captureAllSnapshots?.nativeSize, true)
         XCTAssertEqual(
             plan.resolvedPath(plan.defaults!.captureAll!.outputDirectory!, relativeTo: URL(fileURLWithPath: "/repo/appstage-plan.json")),
             "/repo/Artifacts/movies"
