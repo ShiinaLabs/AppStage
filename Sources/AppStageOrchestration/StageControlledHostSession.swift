@@ -45,7 +45,6 @@ public final class StageControlledHostSession {
         do {
             let port = try await controller.start()
             var arguments = [
-                "--appstage-window", "1100x760",
                 "--appstage-control-host", "127.0.0.1",
                 "--appstage-control-port", String(port),
                 "--appstage-control-token", token,
@@ -55,7 +54,10 @@ public final class StageControlledHostSession {
             case .discoverScenarios:
                 arguments.insert("--appstage-discover-scenarios", at: 0)
             case let .scenario(scenarioID):
-                arguments.insert(contentsOf: ["--appstage-scenario", scenarioID.rawValue], at: 0)
+                arguments.insert(contentsOf: [
+                    "--appstage-scenario", scenarioID.rawValue,
+                    "--appstage-window", "1100x760",
+                ], at: 0)
             }
             let opened = try await StageAppSession.open(
                 appURL: appURL,
