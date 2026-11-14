@@ -1,19 +1,19 @@
 import AppKit
 import Foundation
 
-enum StageAppOwnership: Sendable, Equatable {
+public enum StageAppOwnership: Sendable, Equatable {
     case launchedByAppStage
     case preexisting
 }
 
-enum StageExistingApplicationPolicy: Sendable {
+public enum StageExistingApplicationPolicy: Sendable {
     case attach
     case reject
     case replace
 }
 
 @MainActor
-protocol StageApplicationHandle: AnyObject {
+public protocol StageApplicationHandle: AnyObject {
     var processIdentifier: pid_t { get }
     var bundleIdentifier: String? { get }
     var isTerminated: Bool { get }
@@ -24,19 +24,19 @@ protocol StageApplicationHandle: AnyObject {
 }
 
 @MainActor
-protocol StageApplicationManaging {
+public protocol StageApplicationManaging {
     func runningApplications(bundleIdentifier: String) -> [any StageApplicationHandle]
     func launchApplication(at url: URL, arguments: [String]) async throws -> any StageApplicationHandle
 }
 
 @MainActor
-final class StageAppSession {
-    static let defaultTerminationGracePeriod: Duration = .seconds(3)
+public final class StageAppSession {
+    public static let defaultTerminationGracePeriod: Duration = .seconds(3)
 
-    let ownership: StageAppOwnership
-    let processIdentifier: pid_t
-    let bundleIdentifier: String
-    var isTerminated: Bool { application.isTerminated }
+    public let ownership: StageAppOwnership
+    public let processIdentifier: pid_t
+    public let bundleIdentifier: String
+    public var isTerminated: Bool { application.isTerminated }
 
     private let application: any StageApplicationHandle
     private let keepAppRunning: Bool
@@ -58,16 +58,17 @@ final class StageAppSession {
         self.terminationGracePeriod = terminationGracePeriod
     }
 
-    static func open(
+    public static func open(
         appURL: URL,
         bundleIdentifier: String,
         arguments: [String],
         keepAppRunning: Bool = false,
         existingApplicationPolicy: StageExistingApplicationPolicy = .attach,
         terminationGracePeriod: Duration = defaultTerminationGracePeriod,
-        applicationManager: any StageApplicationManaging = SystemStageApplicationManager()
+        applicationManager: (any StageApplicationManaging)? = nil
     ) async throws -> StageAppSession {
-        let existing = applicationManager.runningApplications(bundleIdentifier: bundleIdentifier)
+        let manager = applicationManager ?? SystemStageApplicationManager()
+        let existing = manager.runningApplications(bundleIdentifier: bundleIdentifier)
             .filter { $0.bundleIdentifier == bundleIdentifier && !$0.isTerminated }
         if !existing.isEmpty {
             switch existingApplicationPolicy {
@@ -96,7 +97,7 @@ final class StageAppSession {
             }
         }
 
-        let application = try await applicationManager.launchApplication(at: appURL, arguments: arguments)
+        let application = try await manager.launchApplication(at: appURL, arguments: arguments)
         guard application.bundleIdentifier == bundleIdentifier else {
             let launchedPID = application.processIdentifier
             let launchedBundleIdentifier = application.bundleIdentifier
@@ -125,7 +126,7 @@ final class StageAppSession {
         return session
     }
 
-    func finish() async {
+    public func finish() async {
         guard !isFinished else { return }
         isFinished = true
         guard ownership == .launchedByAppStage,
@@ -140,7 +141,7 @@ final class StageAppSession {
         _ = await application.waitUntilTerminated(gracePeriod: terminationGracePeriod)
     }
 
-    func performCapture<T>(_ operation: () async throws -> T) async throws -> T {
+    public func performCapture<T>(_ operation: () async throws -> T) async throws -> T {
         do {
             let result = try await operation()
             await finish()
@@ -176,12 +177,12 @@ final class StageAppSession {
     }
 }
 
-enum StageAppSessionError: LocalizedError {
+public enum StageAppSessionError: LocalizedError {
     case launchedBundleIdentifierMismatch(expected: String, actual: String?)
     case targetAlreadyRunning
     case couldNotReplace(pid_t)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .targetAlreadyRunning:
             return "Target application is already running outside this AppStage control session. Quit it first or use --replace-existing."

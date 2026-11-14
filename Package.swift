@@ -12,6 +12,7 @@ let package = Package(
         .library(name: "AppStageMac", targets: ["AppStageMac"]),
         .library(name: "AppStageCapture", targets: ["AppStageCapture"]),
         .library(name: "AppStageControl", targets: ["AppStageControl"]),
+        .library(name: "AppStageOrchestration", targets: ["AppStageOrchestration"]),
         .executable(name: "appstage", targets: ["AppStageCLI"]),
     ],
     dependencies: [
@@ -27,6 +28,15 @@ let package = Package(
         .target(name: "AppStageMac", dependencies: ["AppStage"]),
         .target(name: "AppStageCapture"),
         .target(name: "AppStageControl", dependencies: ["AppStage"]),
+        .target(
+            name: "AppStageOrchestration",
+            dependencies: [
+                "AppStage",
+                "AppStageCapture",
+                "AppStageControl",
+                .product(name: "Axe", package: "axe"),
+            ]
+        ),
         .executableTarget(
             name: "AppStageCLI",
             dependencies: [
@@ -34,8 +44,8 @@ let package = Package(
                 "AppStageMac",
                 "AppStageCapture",
                 "AppStageControl",
+                "AppStageOrchestration",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
-                .product(name: "Axe", package: "axe"),
             ]
         ),
         .testTarget(
@@ -56,7 +66,7 @@ let package = Package(
         ),
         .testTarget(
             name: "AppStageCLITests",
-            dependencies: ["AppStageCLI"]
+            dependencies: ["AppStageCLI", "AppStageOrchestration"]
         ),
     ]
 )

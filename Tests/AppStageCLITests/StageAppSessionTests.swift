@@ -1,3 +1,4 @@
+import AppStageOrchestration
 import Foundation
 import XCTest
 @testable import AppStageCLI

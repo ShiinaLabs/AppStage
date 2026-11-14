@@ -3,6 +3,7 @@ import AppStage
 import AppStageMac
 import AppStageCapture
 import AppStageControl
+import AppStageOrchestration
 import ArgumentParser
 import Foundation
 
@@ -57,43 +58,18 @@ private func runScenario(
     timeout: Duration,
     policy: StageExistingApplicationPolicy
 ) async throws {
-    let token = try StageControlToken.generate()
-    let sessionID = UUID()
-    let controller = StageControlController(
-        token: token, sessionID: sessionID, bundleIdentifier: bundleIdentifier,
-        accessibilityHandler: { operation, pid in StageAccessibilityController.handle(operation, pid: pid) }
-    )
-    var session: StageAppSession?
-    do {
-        let port = try await controller.start()
-        let opened = try await StageAppSession.open(
-            appURL: appURL, bundleIdentifier: bundleIdentifier,
-            arguments: [
-                "--appstage-scenario", scenarioID.rawValue,
-                "--appstage-window", "1100x760",
-                "--appstage-control-host", "127.0.0.1",
-                "--appstage-control-port", String(port),
-                "--appstage-control-token", token,
-                "--appstage-control-session", sessionID.uuidString,
-            ],
-            existingApplicationPolicy: policy
-        )
-        session = opened
-        await controller.bindExpectedPID(opened.processIdentifier)
-        try await controller.waitForHandshake(timeout: timeout)
-        _ = try await controller.request(.loadScenario(scenarioID), timeout: timeout)
-        _ = try await controller.request(.prepare, timeout: timeout)
-        _ = try await controller.waitForEvent(.ready, timeout: timeout)
-        _ = try await controller.request(.play, timeout: timeout)
-        _ = try await controller.waitForEvent(.finished, timeout: timeout)
-        await controller.close()
-        await opened.finish()
-        print("Scenario finished: \(scenarioID.rawValue)")
-    } catch {
-        await controller.close()
-        await session?.finish()
-        throw error
+    try await StageControlledHostSession.withSession(
+        appURL: appURL,
+        bundleIdentifier: bundleIdentifier,
+        mode: .scenario(scenarioID),
+        timeout: timeout,
+        existingApplicationPolicy: policy
+    ) { session in
+        try await session.prepare(scenarioID, timeout: timeout)
+        try await session.play(timeout: timeout)
+        _ = try await session.waitForEvent(.finished, timeout: timeout)
     }
+    print("Scenario finished: \(scenarioID.rawValue)")
 }
 
 struct ScenariosCommand: AsyncParsableCommand {
@@ -147,47 +123,23 @@ private func discoverScenarios(
     timeout: Duration,
     policy: StageExistingApplicationPolicy
 ) async throws {
-    let token = try StageControlToken.generate()
-    let sessionID = UUID()
-    let controller = StageControlController(
-        token: token, sessionID: sessionID, bundleIdentifier: bundleIdentifier,
-        accessibilityHandler: { operation, pid in StageAccessibilityController.handle(operation, pid: pid) }
-    )
-    var appSession: StageAppSession?
-    do {
-        let port = try await controller.start()
-        let opened = try await StageAppSession.open(
-            appURL: appURL,
-            bundleIdentifier: bundleIdentifier,
-            arguments: [
-                "--appstage-discover-scenarios",
-                "--appstage-control-host", "127.0.0.1",
-                "--appstage-control-port", String(port),
-                "--appstage-control-token", token,
-                "--appstage-control-session", sessionID.uuidString,
-            ],
-            existingApplicationPolicy: policy
-        )
-        appSession = opened
-        await controller.bindExpectedPID(opened.processIdentifier)
-        try await controller.waitForHandshake(timeout: timeout)
-        let result = try await controller.request(.listScenarios, timeout: timeout)
-        let scenarios = result.scenarios ?? []
-        if scenarios.isEmpty {
-            print("No scenarios are available.")
-        } else {
-            for scenario in scenarios {
-                let name = scenario.displayName.map { "\t\($0)" } ?? ""
-                let duration = scenario.durationMilliseconds.map { "\t\($0) ms" } ?? ""
-                print("\(scenario.id.rawValue)\(name)\(duration)")
-            }
+    let scenarios = try await StageControlledHostSession.withSession(
+        appURL: appURL,
+        bundleIdentifier: bundleIdentifier,
+        mode: .discoverScenarios,
+        timeout: timeout,
+        existingApplicationPolicy: policy
+    ) { session in
+        try await session.listScenarios(timeout: timeout)
+    }
+    if scenarios.isEmpty {
+        print("No scenarios are available.")
+    } else {
+        for scenario in scenarios {
+            let name = scenario.displayName.map { "\t\($0)" } ?? ""
+            let duration = scenario.durationMilliseconds.map { "\t\($0) ms" } ?? ""
+            print("\(scenario.id.rawValue)\(name)\(duration)")
         }
-        await controller.close()
-        await opened.finish()
-    } catch {
-        await controller.close()
-        await appSession?.finish()
-        throw error
     }
 }
 
@@ -1326,43 +1278,17 @@ private func discoverSnapshotScenarios(
     timeout: Duration,
     policy: StageExistingApplicationPolicy
 ) async throws -> [StageScenarioMetadata] {
-    let token = try StageControlToken.generate()
-    let sessionID = UUID()
-    let controller = StageControlController(
-        token: token,
-        sessionID: sessionID,
-        bundleIdentifier: bundleIdentifier
-    )
-    var session: StageAppSession?
-    do {
-        let port = try await controller.start()
-        let opened = try await StageAppSession.open(
-            appURL: appURL,
-            bundleIdentifier: bundleIdentifier,
-            arguments: [
-                "--appstage-discover-scenarios",
-                "--appstage-control-host", "127.0.0.1",
-                "--appstage-control-port", String(port),
-                "--appstage-control-token", token,
-                "--appstage-control-session", sessionID.uuidString,
-            ],
-            existingApplicationPolicy: policy
-        )
-        session = opened
-        await controller.bindExpectedPID(opened.processIdentifier)
-        try await controller.waitForHandshake(timeout: timeout)
-        let response = try await controller.request(.listScenarios, timeout: timeout)
-        guard let scenarios = response.scenarios, !scenarios.isEmpty else {
-            throw StageBatchRecordError.noScenarios
-        }
-        await controller.close()
-        await opened.finish()
-        return scenarios
-    } catch {
-        await controller.close()
-        await session?.finish()
-        throw error
+    let scenarios = try await StageControlledHostSession.withSession(
+        appURL: appURL,
+        bundleIdentifier: bundleIdentifier,
+        mode: .discoverScenarios,
+        timeout: timeout,
+        existingApplicationPolicy: policy
+    ) { session in
+        try await session.listScenarios(timeout: timeout)
     }
+    guard !scenarios.isEmpty else { throw StageBatchRecordError.noScenarios }
+    return scenarios
 }
 
 @MainActor
@@ -1380,44 +1306,22 @@ private func captureScenarioSnapshot(
     includeDemoCursor: Bool,
     policy: StageExistingApplicationPolicy
 ) async throws {
-    let token = try StageControlToken.generate()
-    let sessionID = UUID()
-    let controller = StageControlController(
-        token: token,
-        sessionID: sessionID,
+    let image = try await StageControlledHostSession.withSession(
+        appURL: appURL,
         bundleIdentifier: bundleIdentifier,
-        accessibilityHandler: { operation, pid in StageAccessibilityController.handle(operation, pid: pid) }
-    )
-    var session: StageAppSession?
-    do {
-        let port = try await controller.start()
-        let opened = try await StageAppSession.open(
-            appURL: appURL,
-            bundleIdentifier: bundleIdentifier,
-            arguments: [
-                "--appstage-scenario", scenarioID.rawValue,
-                "--appstage-window", "1100x760",
-                "--appstage-control-host", "127.0.0.1",
-                "--appstage-control-port", String(port),
-                "--appstage-control-token", token,
-                "--appstage-control-session", sessionID.uuidString,
-            ],
-            existingApplicationPolicy: policy
-        )
-        session = opened
-        await controller.bindExpectedPID(opened.processIdentifier)
-        try await controller.waitForHandshake(timeout: timeout)
-        _ = try await controller.request(.loadScenario(scenarioID), timeout: timeout)
-        _ = try await controller.request(.prepare, timeout: timeout)
-        _ = try await controller.waitForEvent(.ready, timeout: timeout)
-        _ = try await controller.request(.prepareCapture(checkpointID), timeout: timeout)
+        mode: .scenario(scenarioID),
+        timeout: timeout,
+        existingApplicationPolicy: policy
+    ) { session in
+        try await session.prepare(scenarioID, timeout: timeout)
+        try await session.prepareCapture(checkpointID, timeout: timeout)
         let window = try await waitForWindow(
             bundleIdentifier: bundleIdentifier,
-            processIdentifier: opened.processIdentifier,
+            processIdentifier: session.processIdentifier,
             timeout: timeout
         )
         let targetDisplay = try await display(for: window)
-        let image = try await capturePNG(
+        return try await capturePNG(
             window: window,
             display: targetDisplay,
             outputURL: outputURL,
@@ -1427,14 +1331,8 @@ private func captureScenarioSnapshot(
             nativeSize: nativeSize,
             includeDemoCursor: includeDemoCursor
         )
-        await controller.close()
-        await opened.finish()
-        print("Wrote \(image.width)×\(image.height) PNG to \(outputURL.path)")
-    } catch {
-        await controller.close()
-        await session?.finish()
-        throw error
     }
+    print("Wrote \(image.width)×\(image.height) PNG to \(outputURL.path)")
 }
 
 private func captureTarget(bundleIdentifier: String) async throws -> (StageCaptureWindow, StageCaptureDisplay) {

@@ -4,8 +4,8 @@ import AppStage
 import AppStageControl
 
 @MainActor
-enum StageAccessibilityController {
-    static func handle(_ operation: StageAccessibilityOperation, pid: Int32) -> StageAccessibilityResult {
+public enum StageAccessibilityController {
+    public static func handle(_ operation: StageAccessibilityOperation, pid: Int32) -> StageAccessibilityResult {
         do {
             guard Axe.App.checkAccessibility(prompt: false) else {
                 throw StageControlError.remoteFailure("Grant Accessibility permission to appstage in System Settings > Privacy & Security > Accessibility")
