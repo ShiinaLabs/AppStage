@@ -3,14 +3,15 @@ import Foundation
 
 @MainActor
 final class StageBatchSnapshotWorkflow {
-    typealias DiscoverScenarios = @MainActor () async throws -> [StageScenarioMetadata]
-    typealias CapturePoint = @MainActor (StageScenarioID, StageCapturePointID, URL) async throws -> Void
+    typealias DiscoverCases = @MainActor () async throws -> [StageCaseMetadata]
+    typealias CapturePoint = @MainActor (StageCaseID, StageScenarioID, StageCapturePointID, Bool, URL) async throws -> Void
 
     private struct Item: Codable {
         let caseID: String
         let scenarioID: String
         let capturePointID: String
         let output: String
+        let includesWindowShadow: Bool
         var status: String
         var error: String?
     }
@@ -32,13 +33,14 @@ final class StageBatchSnapshotWorkflow {
         var items: [Item]
     }
 
-    private let discoverScenarios: DiscoverScenarios
+    private let discoverCases: DiscoverCases
     private let capturePoint: CapturePoint
     private let outputDirectory: URL
     private let bundleIdentifier: String
     private let horizontalMargin: Double
     private let verticalMargin: Double
     private let includesWindowShadow: Bool
+    private let windowShadowOverride: Bool?
     private let nativeSize: Bool
     private let includesDemoCursor: Bool
     private let timeoutSeconds: Int
@@ -49,8 +51,44 @@ final class StageBatchSnapshotWorkflow {
     private let exclusions: [String]
 
     init(
-        discoverScenarios: @escaping DiscoverScenarios,
+        discoverCases: @escaping DiscoverCases,
         capturePoint: @escaping CapturePoint,
+        outputDirectory: URL,
+        bundleIdentifier: String,
+        horizontalMargin: Double,
+        verticalMargin: Double,
+        includesWindowShadow: Bool,
+        windowShadowOverride: Bool? = nil,
+        nativeSize: Bool = false,
+        includesDemoCursor: Bool,
+        timeoutSeconds: Int = 30,
+        casePlan: StageCasePlan? = nil,
+        casePlanPath: String? = nil,
+        suite: String? = nil,
+        filters: [String] = [],
+        exclusions: [String] = []
+    ) {
+        self.discoverCases = discoverCases
+        self.capturePoint = capturePoint
+        self.outputDirectory = outputDirectory.standardizedFileURL
+        self.bundleIdentifier = bundleIdentifier
+        self.horizontalMargin = horizontalMargin
+        self.verticalMargin = verticalMargin
+        self.includesWindowShadow = includesWindowShadow
+        self.windowShadowOverride = windowShadowOverride
+        self.nativeSize = nativeSize
+        self.includesDemoCursor = includesDemoCursor
+        self.timeoutSeconds = timeoutSeconds
+        self.casePlan = casePlan
+        self.casePlanPath = casePlanPath
+        self.suite = suite
+        self.filters = filters
+        self.exclusions = exclusions
+    }
+
+    convenience init(
+        discoverScenarios: @escaping @MainActor () async throws -> [StageScenarioMetadata],
+        capturePoint: @escaping @MainActor (StageScenarioID, StageCapturePointID, URL) async throws -> Void,
         outputDirectory: URL,
         bundleIdentifier: String,
         horizontalMargin: Double,
@@ -65,30 +103,61 @@ final class StageBatchSnapshotWorkflow {
         filters: [String] = [],
         exclusions: [String] = []
     ) {
-        self.discoverScenarios = discoverScenarios
-        self.capturePoint = capturePoint
-        self.outputDirectory = outputDirectory.standardizedFileURL
-        self.bundleIdentifier = bundleIdentifier
-        self.horizontalMargin = horizontalMargin
-        self.verticalMargin = verticalMargin
-        self.includesWindowShadow = includesWindowShadow
-        self.nativeSize = nativeSize
-        self.includesDemoCursor = includesDemoCursor
-        self.timeoutSeconds = timeoutSeconds
-        self.casePlan = casePlan
-        self.casePlanPath = casePlanPath
-        self.suite = suite
-        self.filters = filters
-        self.exclusions = exclusions
+        self.init(
+            discoverCases: {
+                let scenarios = try await discoverScenarios()
+                return scenarios.flatMap { scenario in
+                    if let casePlan {
+                        return casePlan.cases.compactMap { testCase -> StageCaseMetadata? in
+                            guard testCase.scenarioID == scenario.id.rawValue else { return nil }
+                            return StageCaseMetadata(
+                                id: StageCaseID(testCase.id),
+                                scenarioID: scenario.id,
+                                displayName: scenario.displayName,
+                                capturePointIDs: testCase.capturePointID.map { [StageCapturePointID($0)] }
+                                    ?? scenario.capturePointIDs
+                            )
+                        }
+                    }
+                    return scenario.capturePointIDs.map { pointID in
+                        let scenarioID = scenario.id.rawValue
+                        let point = pointID.rawValue
+                        let legacyID = "\(scenarioID.utf8.count):\(scenarioID)\(point.utf8.count):\(point)"
+                        return StageCaseMetadata(
+                            id: StageCaseID(legacyID),
+                            scenarioID: scenario.id,
+                            displayName: scenario.displayName,
+                            capturePointIDs: [pointID]
+                        )
+                    }
+                }
+            },
+            capturePoint: { _, scenarioID, pointID, _, outputURL in
+                try await capturePoint(scenarioID, pointID, outputURL)
+            },
+            outputDirectory: outputDirectory,
+            bundleIdentifier: bundleIdentifier,
+            horizontalMargin: horizontalMargin,
+            verticalMargin: verticalMargin,
+            includesWindowShadow: includesWindowShadow,
+            nativeSize: nativeSize,
+            includesDemoCursor: includesDemoCursor,
+            timeoutSeconds: timeoutSeconds,
+            casePlan: casePlan,
+            casePlanPath: casePlanPath,
+            suite: suite,
+            filters: filters,
+            exclusions: exclusions
+        )
     }
 
     func run() async throws {
-        let scenarios = try await discoverScenarios()
-        guard scenarios.contains(where: { !$0.capturePointIDs.isEmpty }) else {
+        let hostCases = try await discoverCases()
+        guard hostCases.contains(where: { !$0.capturePointIDs.isEmpty }) else {
             throw StageBatchSnapshotError.noCapturePoints
         }
         let selectedCases = try StageCasePlan.select(
-            from: scenarios,
+            from: hostCases,
             using: casePlan,
             kind: .capturePoint,
             suite: suite,
@@ -96,12 +165,12 @@ final class StageBatchSnapshotWorkflow {
             excludes: exclusions
         )
         let entries = try selectedCases.map { selectedCase in
-            let scenarioBase = try StageCaptureOutputNaming.fileName(for: selectedCase.scenario.id)
+            let caseBase = try StageCaptureOutputNaming.fileName(for: StageScenarioID(selectedCase.id))
                 .replacingOccurrences(of: ".mov", with: "")
             let pointID = selectedCase.capturePointID!
             let pointBase = try StageCaptureOutputNaming.fileName(for: StageScenarioID(pointID.rawValue))
                 .replacingOccurrences(of: ".mov", with: "")
-            return (selectedCase, "\(scenarioBase)--\(pointBase).png")
+            return (selectedCase, "\(caseBase)--\(pointBase).png")
         }
         try prepareOutputDirectory()
         var collisionKeys = Set<String>()
@@ -113,7 +182,7 @@ final class StageBatchSnapshotWorkflow {
 
         let manifestURL = outputDirectory.appendingPathComponent("manifest.json")
         var manifest = Manifest(
-            schemaVersion: 2,
+            schemaVersion: 3,
             bundleIdentifier: bundleIdentifier,
             horizontalMargin: horizontalMargin,
             verticalMargin: verticalMargin,
@@ -132,6 +201,9 @@ final class StageBatchSnapshotWorkflow {
                     scenarioID: selectedCase.scenario.id.rawValue,
                     capturePointID: selectedCase.capturePointID!.rawValue,
                     output: fileName,
+                    includesWindowShadow: windowShadowOverride
+                        ?? selectedCase.includesWindowShadow
+                        ?? includesWindowShadow,
                     status: "pending",
                     error: nil
                 )
@@ -146,7 +218,13 @@ final class StageBatchSnapshotWorkflow {
             let outputURL = outputDirectory.appendingPathComponent(entry.1)
             do {
                 try Task.checkCancellation()
-                try await capturePoint(entry.0.scenario.id, entry.0.capturePointID!, outputURL)
+                try await capturePoint(
+                    StageCaseID(entry.0.id),
+                    entry.0.scenario.id,
+                    entry.0.capturePointID!,
+                    manifest.items[index].includesWindowShadow,
+                    outputURL
+                )
                 manifest.items[index].status = "completed"
                 print("Completed: \(entry.1)")
             } catch is CancellationError {

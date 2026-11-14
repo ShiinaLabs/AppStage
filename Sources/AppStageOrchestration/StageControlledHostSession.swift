@@ -5,6 +5,7 @@ import Foundation
 public enum StageHostLaunchMode {
     case discoverScenarios
     case scenario(StageScenarioID)
+    case captureCase(StageCaseID)
 }
 
 @MainActor
@@ -58,6 +59,8 @@ public final class StageControlledHostSession {
                     "--appstage-scenario", scenarioID.rawValue,
                     "--appstage-window", "1100x760",
                 ], at: 0)
+            case let .captureCase(caseID):
+                arguments.insert(contentsOf: ["--appstage-case", caseID.rawValue], at: 0)
             }
             let opened = try await StageAppSession.open(
                 appURL: appURL,
@@ -94,6 +97,17 @@ public final class StageControlledHostSession {
     public func listScenarios(timeout: Duration = .seconds(30)) async throws -> [StageScenarioMetadata] {
         let result = try await request(.listScenarios, timeout: timeout)
         return result.scenarios ?? []
+    }
+
+    public func listCases(timeout: Duration = .seconds(30)) async throws -> [StageCaseMetadata] {
+        let result = try await request(.listCases, timeout: timeout)
+        return result.cases ?? []
+    }
+
+    public func prepare(_ caseID: StageCaseID, timeout: Duration = .seconds(30)) async throws {
+        _ = try await request(.loadCase(caseID), timeout: timeout)
+        _ = try await request(.prepare, timeout: timeout)
+        _ = try await waitForEvent(.ready, timeout: timeout)
     }
 
     public func prepare(_ scenarioID: StageScenarioID, timeout: Duration = .seconds(30)) async throws {

@@ -2,7 +2,7 @@ import AppStage
 import Foundation
 
 public enum StageControlProtocol {
-    public static let version = 4
+    public static let version = 5
     public static let maximumMessageSize = 1_048_576
 }
 
@@ -86,6 +86,7 @@ public struct StageControlIdentity: Sendable {
 
 public enum StageControlCommand: Codable, Sendable, Equatable {
     case loadScenario(StageScenarioID)
+    case loadCase(StageCaseID)
     case prepare
     case play
     case pause
@@ -93,6 +94,7 @@ public enum StageControlCommand: Codable, Sendable, Equatable {
     case performAction(StageAction)
     case prepareCapture(StageCapturePointID)
     case listScenarios
+    case listCases
     case queryState
     case seek(positionMilliseconds: Int64)
 }
@@ -116,17 +118,20 @@ public struct StageControlSnapshot: Codable, Sendable, Equatable {
     public let scenarioID: StageScenarioID?
     public let positionMilliseconds: Int64?
     public let scenarios: [StageScenarioMetadata]?
+    public let cases: [StageCaseMetadata]?
 
     public init(
         state: StageControlState,
         scenarioID: StageScenarioID? = nil,
         positionMilliseconds: Int64? = nil,
-        scenarios: [StageScenarioMetadata]? = nil
+        scenarios: [StageScenarioMetadata]? = nil,
+        cases: [StageCaseMetadata]? = nil
     ) {
         self.state = state
         self.scenarioID = scenarioID
         self.positionMilliseconds = positionMilliseconds
         self.scenarios = scenarios
+        self.cases = cases
     }
 }
 

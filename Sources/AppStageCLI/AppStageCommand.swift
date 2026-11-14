@@ -330,25 +330,26 @@ struct CaptureAllSnapshotsCommand: AsyncParsableCommand {
         let outputURL = URL(fileURLWithPath: outputPath).standardizedFileURL
         let captureTask = Task { @MainActor in
             let workflow = StageBatchSnapshotWorkflow(
-                discoverScenarios: {
-                    try await discoverSnapshotScenarios(
+                discoverCases: {
+                    try await discoverSnapshotCases(
                     appURL: appURL,
                     bundleIdentifier: bundleIdentifier,
                     timeout: .seconds(timeout),
                     policy: replaceExisting ? .replace : .reject
                 )
             },
-            capturePoint: { scenarioID, pointID, fileURL in
+            capturePoint: { caseID, scenarioID, pointID, includesWindowShadow, fileURL in
                 try await captureScenarioSnapshot(
                     appURL: appURL,
                     bundleIdentifier: bundleIdentifier,
                     scenarioID: scenarioID,
+                    caseID: caseID,
                     checkpointID: pointID,
                     outputURL: fileURL,
                     timeout: .seconds(timeout),
                     horizontalMargin: horizontalMargin,
                     verticalMargin: verticalMargin,
-                    includeWindowShadow: includeWindowShadow,
+                    includeWindowShadow: includesWindowShadow,
                     nativeSize: nativeSize,
                     includeDemoCursor: includeDemoCursor,
                     policy: replaceExisting ? .replace : .reject
@@ -359,6 +360,7 @@ struct CaptureAllSnapshotsCommand: AsyncParsableCommand {
                 horizontalMargin: nativeSize ? 0 : horizontalMargin,
                 verticalMargin: nativeSize ? 0 : verticalMargin,
                 includesWindowShadow: includeWindowShadow,
+                windowShadowOverride: disableWindowShadow ? false : (self.includeWindowShadow ? true : nil),
                 nativeSize: nativeSize,
                 includesDemoCursor: includeDemoCursor,
                 timeoutSeconds: timeout,
@@ -1272,23 +1274,23 @@ private func capturePNG(
 }
 
 @MainActor
-private func discoverSnapshotScenarios(
+private func discoverSnapshotCases(
     appURL: URL,
     bundleIdentifier: String,
     timeout: Duration,
     policy: StageExistingApplicationPolicy
-) async throws -> [StageScenarioMetadata] {
-    let scenarios = try await StageControlledHostSession.withSession(
+) async throws -> [StageCaseMetadata] {
+    let cases = try await StageControlledHostSession.withSession(
         appURL: appURL,
         bundleIdentifier: bundleIdentifier,
         mode: .discoverScenarios,
         timeout: timeout,
         existingApplicationPolicy: policy
     ) { session in
-        try await session.listScenarios(timeout: timeout)
+        try await session.listCases(timeout: timeout)
     }
-    guard !scenarios.isEmpty else { throw StageBatchRecordError.noScenarios }
-    return scenarios
+    guard !cases.isEmpty else { throw StageBatchRecordError.noScenarios }
+    return cases
 }
 
 @MainActor
@@ -1296,6 +1298,7 @@ private func captureScenarioSnapshot(
     appURL: URL,
     bundleIdentifier: String,
     scenarioID: StageScenarioID,
+    caseID: StageCaseID? = nil,
     checkpointID: StageCapturePointID,
     outputURL: URL,
     timeout: Duration,
@@ -1306,14 +1309,19 @@ private func captureScenarioSnapshot(
     includeDemoCursor: Bool,
     policy: StageExistingApplicationPolicy
 ) async throws {
+    let mode: StageHostLaunchMode = caseID.map { .captureCase($0) } ?? .scenario(scenarioID)
     let image = try await StageControlledHostSession.withSession(
         appURL: appURL,
         bundleIdentifier: bundleIdentifier,
-        mode: .scenario(scenarioID),
+        mode: mode,
         timeout: timeout,
         existingApplicationPolicy: policy
     ) { session in
-        try await session.prepare(scenarioID, timeout: timeout)
+        if let caseID {
+            try await session.prepare(caseID, timeout: timeout)
+        } else {
+            try await session.prepare(scenarioID, timeout: timeout)
+        }
         try await session.prepareCapture(checkpointID, timeout: timeout)
         let window = try await waitForWindow(
             bundleIdentifier: bundleIdentifier,

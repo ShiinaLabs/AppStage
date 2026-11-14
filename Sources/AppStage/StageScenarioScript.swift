@@ -173,6 +173,29 @@ public struct StageScenarioMetadata: Codable, Sendable, Equatable {
     }
 }
 
+/// Host-owned metadata that lets a suite select a product-defined scenario case by ID.
+public struct StageCaseMetadata: Codable, Sendable, Equatable {
+    public let id: StageCaseID
+    public let scenarioID: StageScenarioID
+    public let displayName: String?
+    public let capturePointIDs: [StageCapturePointID]
+    public let includesWindowShadow: Bool?
+
+    public init(
+        id: StageCaseID,
+        scenarioID: StageScenarioID,
+        displayName: String? = nil,
+        capturePointIDs: [StageCapturePointID] = [],
+        includesWindowShadow: Bool? = nil
+    ) {
+        self.id = id
+        self.scenarioID = scenarioID
+        self.displayName = displayName
+        self.capturePointIDs = capturePointIDs
+        self.includesWindowShadow = includesWindowShadow
+    }
+}
+
 public enum StageConditionRegistryError: Error, Equatable, Sendable, LocalizedError {
     case duplicateCondition(StageConditionID)
     case unknownCondition(StageConditionID)

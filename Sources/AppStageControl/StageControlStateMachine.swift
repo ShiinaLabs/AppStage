@@ -13,7 +13,7 @@ public struct StageControlStateMachine: Sendable {
     public mutating func begin(_ command: StageControlCommand) throws {
         let allowed: Bool
         switch command {
-        case .loadScenario:
+        case .loadScenario, .loadCase:
             allowed = state == .connected || state == .finished
         case .prepare:
             allowed = state == .scenarioLoaded
@@ -27,7 +27,7 @@ public struct StageControlStateMachine: Sendable {
             allowed = [.ready, .playing, .paused].contains(state)
         case .prepareCapture:
             allowed = state == .ready
-        case .listScenarios:
+        case .listScenarios, .listCases:
             allowed = [.connected, .scenarioLoaded, .ready, .finished].contains(state)
         case .queryState:
             allowed = state != .disconnected && state != .failed
@@ -38,19 +38,23 @@ public struct StageControlStateMachine: Sendable {
             throw StageControlError.invalidState("Cannot perform \(command) while control state is \(state.rawValue)")
         }
         if case .loadScenario = command, state == .finished { state = .connected }
+        if case .loadCase = command, state == .finished { state = .connected }
         if case .reset = command { state = .scenarioLoaded }
         if case .prepare = command { state = .preparing }
     }
 
-    public mutating func succeeded(_ command: StageControlCommand) {
+    public mutating func succeeded(_ command: StageControlCommand, loadedScenarioID: StageScenarioID? = nil) {
         guard state != .finished && state != .failed else { return }
         switch command {
         case let .loadScenario(id):
             scenarioID = id
             state = .scenarioLoaded
+        case .loadCase:
+            scenarioID = loadedScenarioID
+            state = .scenarioLoaded
         case .reset:
             state = .scenarioLoaded
-        case .listScenarios:
+        case .listScenarios, .listCases:
             break
         default:
             break

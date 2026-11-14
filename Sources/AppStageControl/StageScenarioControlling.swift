@@ -3,6 +3,7 @@ import AppStage
 /// Product behavior supplied by each host application, independent of the wire transport.
 public protocol StageScenarioControlling: Sendable {
     func loadScenario(_ id: StageScenarioID) async throws
+    func loadCase(_ id: StageCaseID) async throws -> StageScenarioID
     func prepareScenario() async throws
     func playScenario() async throws
     func pauseScenario() async throws
@@ -11,8 +12,31 @@ public protocol StageScenarioControlling: Sendable {
     /// Prepares the named deterministic Host state and returns only when it is ready to capture.
     func prepareCapture(at pointID: StageCapturePointID) async throws
     func availableScenarios() async -> [StageScenarioMetadata]
+    func availableCases() async -> [StageCaseMetadata]
     /// The host emits asynchronous scenario events, especially finished and failed.
     func events() async -> AsyncStream<StageControlEvent>
     /// Called when the controller connection is lost so playback can stop safely.
     func controlDisconnected() async
+}
+
+public extension StageScenarioControlling {
+    func loadCase(_ id: StageCaseID) async throws -> StageScenarioID {
+        let scenarioID = StageScenarioID(id.rawValue)
+        guard await availableScenarios().contains(where: { $0.id == scenarioID }) else {
+            throw StageControlError.remoteFailure("Unknown Host case: \(id.rawValue)")
+        }
+        try await loadScenario(scenarioID)
+        return scenarioID
+    }
+
+    func availableCases() async -> [StageCaseMetadata] {
+        await availableScenarios().map { scenario in
+            StageCaseMetadata(
+                id: StageCaseID(scenario.id.rawValue),
+                scenarioID: scenario.id,
+                displayName: scenario.displayName,
+                capturePointIDs: scenario.capturePointIDs
+            )
+        }
+    }
 }

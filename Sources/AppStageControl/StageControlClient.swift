@@ -108,7 +108,7 @@ public actor StageControlClient {
         }
         guard !closed && !Task.isCancelled, let socket else { return }
         let isReadOnly = switch request.command {
-        case .listScenarios, .queryState: true
+        case .listScenarios, .listCases, .queryState: true
         default: false
         }
         guard activeRequestID == nil || isReadOnly else {
@@ -121,23 +121,31 @@ public actor StageControlClient {
         if !isReadOnly { activeRequestID = request.id }
         do {
             try machine.begin(request.command)
+            var loadedScenarioID: StageScenarioID?
             switch request.command {
             case let .loadScenario(id): try await host.loadScenario(id)
+            case let .loadCase(id): loadedScenarioID = try await host.loadCase(id)
             case .prepare: try await host.prepareScenario()
             case .play: try await host.playScenario()
             case .pause: try await host.pauseScenario()
             case .reset: try await host.resetScenario()
             case let .performAction(action): try await host.performAction(action)
             case let .prepareCapture(pointID): try await host.prepareCapture(at: pointID)
-            case .listScenarios: break
+            case .listScenarios, .listCases: break
             case .queryState: break
             case .seek: throw StageControlError.unsupported("seek reconstruction")
             }
             guard !closed && !Task.isCancelled else { return }
             if machine.state == .failed { return }
-            machine.succeeded(request.command)
+            machine.succeeded(request.command, loadedScenarioID: loadedScenarioID)
             let scenarios = request.command == .listScenarios ? await host.availableScenarios() : nil
-            let snapshot = StageControlSnapshot(state: machine.state, scenarioID: machine.scenarioID, scenarios: scenarios)
+            let cases = request.command == .listCases ? await host.availableCases() : nil
+            let snapshot = StageControlSnapshot(
+                state: machine.state,
+                scenarioID: machine.scenarioID,
+                scenarios: scenarios,
+                cases: cases
+            )
             try await socket.send(.response(.init(requestID: request.id, result: .success(snapshot))))
             guard !closed && !Task.isCancelled && machine.state != .finished && machine.state != .failed else { return }
             switch request.command {

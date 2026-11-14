@@ -5,7 +5,7 @@ import Foundation
 struct StageCasePlan: Decodable, Sendable {
     struct Case: Decodable, Sendable {
         let id: String
-        let scenarioID: String
+        let scenarioID: String?
         let capturePointID: String?
     }
 
@@ -57,6 +57,7 @@ struct StageCasePlan: Decodable, Sendable {
         let id: String
         let scenario: StageScenarioMetadata
         let capturePointID: StageCapturePointID?
+        var includesWindowShadow: Bool? = nil
     }
 
     let schemaVersion: Int
@@ -118,6 +119,89 @@ struct StageCasePlan: Decodable, Sendable {
             includes: includes,
             excludes: excludes
         )
+    }
+
+    static func select(
+        from hostCases: [StageCaseMetadata],
+        using plan: StageCasePlan?,
+        kind: Kind,
+        suite: String?,
+        includes: [String],
+        excludes: [String]
+    ) throws -> [SelectedCase] {
+        if plan == nil && suite != nil { throw StageCasePlanError.suiteRequiresConfiguration }
+        var casesByID: [String: StageCaseMetadata] = [:]
+        for hostCase in hostCases {
+            guard casesByID.updateValue(hostCase, forKey: hostCase.id.rawValue) == nil else {
+                throw StageCasePlanError.duplicateCaseID(hostCase.id.rawValue)
+            }
+        }
+        guard includes.allSatisfy({ !$0.isEmpty }), excludes.allSatisfy({ !$0.isEmpty }) else {
+            throw StageCasePlanError.emptyFilter
+        }
+
+        let orderedCases: [Case]
+        if let plan {
+            let selectedSuite = suite ?? plan.defaultSuite
+            if let selectedSuite {
+                guard let ids = plan.suites[selectedSuite] else { throw StageCasePlanError.unknownSuite(selectedSuite) }
+                let casesByID = Dictionary(uniqueKeysWithValues: plan.cases.map { ($0.id, $0) })
+                orderedCases = try ids.map { id in
+                    guard let testCase = casesByID[id] else { throw StageCasePlanError.unknownCase(id) }
+                    return testCase
+                }
+            } else if plan.cases.isEmpty {
+                orderedCases = hostCases.map {
+                    Case(id: $0.id.rawValue, scenarioID: nil, capturePointID: nil)
+                }
+            } else {
+                orderedCases = plan.cases
+            }
+        } else {
+            orderedCases = hostCases.map {
+                Case(id: $0.id.rawValue, scenarioID: nil, capturePointID: nil)
+            }
+        }
+
+        let filtered = orderedCases.filter { testCase in
+            (includes.isEmpty || includes.contains { Self.matches($0, testCase.id) })
+                && !excludes.contains { Self.matches($0, testCase.id) }
+        }
+        guard !filtered.isEmpty else { throw StageCasePlanError.noMatchingCases }
+        let expectsCapturePoint = kind == .capturePoint
+        return try filtered.flatMap { testCase in
+            guard let hostCase = casesByID[testCase.id] else { throw StageCasePlanError.unknownCase(testCase.id) }
+            if let scenarioID = testCase.scenarioID, scenarioID != hostCase.scenarioID.rawValue {
+                throw StageCasePlanError.unknownScenario(testCase.id, scenarioID)
+            }
+            guard expectsCapturePoint || testCase.capturePointID == nil else {
+                throw StageCasePlanError.incompatibleCase(testCase.id, expected: "scenario")
+            }
+            let capturePointIDs = expectsCapturePoint
+                ? testCase.capturePointID.map { [StageCapturePointID($0)] } ?? hostCase.capturePointIDs
+                : []
+            if expectsCapturePoint && capturePointIDs.isEmpty {
+                throw StageCasePlanError.incompatibleCase(testCase.id, expected: "capture point")
+            }
+            if let invalidPoint = capturePointIDs.first(where: { !hostCase.capturePointIDs.contains($0) }) {
+                throw StageCasePlanError.unknownCapturePoint(testCase.id, invalidPoint.rawValue)
+            }
+            let scenario = StageScenarioMetadata(
+                id: hostCase.scenarioID,
+                displayName: hostCase.displayName,
+                capturePointIDs: hostCase.capturePointIDs
+            )
+            return expectsCapturePoint
+                ? capturePointIDs.map {
+                    SelectedCase(
+                        id: testCase.id,
+                        scenario: scenario,
+                        capturePointID: $0,
+                        includesWindowShadow: hostCase.includesWindowShadow
+                    )
+                }
+                : [SelectedCase(id: testCase.id, scenario: scenario, capturePointID: nil)]
+        }
     }
 
     func select(
@@ -184,8 +268,9 @@ struct StageCasePlan: Decodable, Sendable {
         }
 
         return try filtered.map { testCase in
-            guard let scenario = scenariosByID[testCase.scenarioID] else {
-                throw StageCasePlanError.unknownScenario(testCase.id, testCase.scenarioID)
+            guard let scenarioID = testCase.scenarioID,
+                  let scenario = scenariosByID[scenarioID] else {
+                throw StageCasePlanError.unknownScenario(testCase.id, testCase.scenarioID ?? "")
             }
             if let capturePointID = testCase.capturePointID {
                 guard scenario.capturePointIDs.contains(where: { $0.rawValue == capturePointID }) else {
@@ -207,19 +292,22 @@ struct StageCasePlan: Decodable, Sendable {
         var targets = Set<Target>()
         for testCase in cases {
             guard !testCase.id.isEmpty else { throw StageCasePlanError.emptyIdentifier("case") }
-            guard !testCase.scenarioID.isEmpty else { throw StageCasePlanError.emptyIdentifier("scenario") }
+            if let scenarioID = testCase.scenarioID, scenarioID.isEmpty {
+                throw StageCasePlanError.emptyIdentifier("scenario")
+            }
             if let capturePointID = testCase.capturePointID, capturePointID.isEmpty {
                 throw StageCasePlanError.emptyIdentifier("capture point")
             }
             guard caseIDs.insert(testCase.id).inserted else { throw StageCasePlanError.duplicateCaseID(testCase.id) }
             let target: Target
             let targetDescription: String
-            if let capturePointID = testCase.capturePointID {
-                target = .capturePoint(scenarioID: testCase.scenarioID, capturePointID: capturePointID)
-                targetDescription = "\(testCase.scenarioID)/\(capturePointID)"
+            if let capturePointID = testCase.capturePointID, let scenarioID = testCase.scenarioID {
+                target = .capturePoint(scenarioID: scenarioID, capturePointID: capturePointID)
+                targetDescription = "\(scenarioID)/\(capturePointID)"
             } else {
-                target = .scenario(testCase.scenarioID)
-                targetDescription = testCase.scenarioID
+                let targetID = testCase.scenarioID ?? "case:\(testCase.id)"
+                target = .scenario(targetID)
+                targetDescription = targetID
             }
             guard targets.insert(target).inserted else {
                 throw StageCasePlanError.duplicateTarget(targetDescription)
@@ -242,8 +330,9 @@ struct StageCasePlan: Decodable, Sendable {
 
     private func validateTargets(_ scenariosByID: [String: StageScenarioMetadata]) throws {
         for testCase in cases {
-            guard let scenario = scenariosByID[testCase.scenarioID] else {
-                throw StageCasePlanError.unknownScenario(testCase.id, testCase.scenarioID)
+            guard let scenarioID = testCase.scenarioID,
+                  let scenario = scenariosByID[scenarioID] else {
+                throw StageCasePlanError.unknownScenario(testCase.id, testCase.scenarioID ?? "")
             }
             if let capturePointID = testCase.capturePointID,
                !scenario.capturePointIDs.contains(where: { $0.rawValue == capturePointID }) {

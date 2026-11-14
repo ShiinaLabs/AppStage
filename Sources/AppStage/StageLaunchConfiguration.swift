@@ -4,6 +4,7 @@ import Foundation
 /// Options supplied to an app launched by AppStage.
 public struct StageLaunchConfiguration: Sendable {
     public let scenarioID: StageScenarioID?
+    public let caseID: StageCaseID?
     public let autoplay: Bool
     public let windowSize: CGSize?
     public let controlHost: String?
@@ -16,6 +17,7 @@ public struct StageLaunchConfiguration: Sendable {
     /// arguments owned by the host app are ignored.
     public init(arguments: [String]) throws {
         var scenarioID: StageScenarioID?
+        var caseID: StageCaseID?
         var autoplay = false
         var windowSize: CGSize?
         var controlHost: String?
@@ -36,6 +38,15 @@ public struct StageLaunchConfiguration: Sendable {
                     throw StageLaunchConfigurationError.invalidValue(option, value)
                 }
                 scenarioID = StageScenarioID(value)
+                index += 2
+
+            case "--appstage-case":
+                try Self.markSeen(option, in: &seenOptions)
+                let value = try Self.value(after: option, in: arguments, at: index)
+                guard !value.isEmpty else {
+                    throw StageLaunchConfigurationError.invalidValue(option, value)
+                }
+                caseID = StageCaseID(value)
                 index += 2
 
             case "--appstage-autoplay":
@@ -90,6 +101,10 @@ public struct StageLaunchConfiguration: Sendable {
             }
         }
 
+        guard scenarioID == nil || caseID == nil else {
+            throw StageLaunchConfigurationError.invalidValue("--appstage-case", caseID?.rawValue ?? "")
+        }
+
         let controlCount = [controlHost != nil, controlPort != nil, controlToken != nil, controlSession != nil]
             .filter { $0 }.count
         guard controlCount == 0 || controlCount == 4 else {
@@ -97,6 +112,7 @@ public struct StageLaunchConfiguration: Sendable {
         }
 
         self.scenarioID = scenarioID
+        self.caseID = caseID
         self.autoplay = autoplay
         self.windowSize = windowSize
         self.controlHost = controlHost
