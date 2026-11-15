@@ -12,7 +12,7 @@ public protocol StageScenarioControlling: Sendable {
     /// Prepares the named deterministic Host state and returns only when it is ready to capture.
     func prepareCapture(at pointID: StageCapturePointID) async throws
     func availableScenarios() async -> [StageScenarioMetadata]
-    func availableCases() async -> [StageCaseMetadata]
+    func captureCatalog() async -> StageCaptureCatalog
     /// The host emits asynchronous scenario events, especially finished and failed.
     func events() async -> AsyncStream<StageControlEvent>
     /// Called when the controller connection is lost so playback can stop safely.

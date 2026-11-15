@@ -286,7 +286,7 @@ struct StageCasePlan: Decodable, Sendable {
         }
     }
 
-    private func validate() throws {
+    func validate() throws {
         guard schemaVersion == 1 else { throw StageCasePlanError.unsupportedSchemaVersion(schemaVersion) }
         var caseIDs = Set<String>()
         var targets = Set<Target>()
@@ -417,6 +417,7 @@ enum StageCasePlanError: Error, Equatable, LocalizedError {
     case duplicateScenarioID(String)
     case duplicateTarget(String)
     case duplicateSuiteCase(String, String)
+    case duplicateSuite(String)
     case unknownSuite(String)
     case unknownCase(String)
     case unknownScenario(String, String)
@@ -435,12 +436,13 @@ enum StageCasePlanError: Error, Equatable, LocalizedError {
         case let .duplicateScenarioID(id): "Host discovery returned duplicate Scenario ID: \(id)"
         case let .duplicateTarget(target): "Multiple AppStage cases reference the same Host target: \(target)"
         case let .duplicateSuiteCase(suite, id): "Suite \(suite) lists case \(id) more than once."
+        case let .duplicateSuite(suite): "Duplicate AppStage suite ID: \(suite)"
         case let .unknownSuite(suite): "Unknown AppStage suite: \(suite)"
         case let .unknownCase(id): "Unknown AppStage case ID: \(id)"
         case let .unknownScenario(caseID, scenarioID): "Case \(caseID) references unknown Host Scenario \(scenarioID)."
         case let .unknownCapturePoint(caseID, pointID): "Case \(caseID) references unknown capture point \(pointID)."
         case let .incompatibleCase(id, expected): "Case \(id) is not a \(expected) case for this command."
-        case .suiteRequiresConfiguration: "--suite requires --config."
+        case .suiteRequiresConfiguration: "--suite requires Host catalog discovery or --config."
         case .emptyFilter: "Case filter patterns must not be empty."
         case .noMatchingCases: "No cases matched the selected suite and filters."
         case let .invalidDefault(message): "Invalid AppStage case plan default: \(message)"
@@ -452,7 +454,7 @@ struct StageCaseSelectionArguments: ParsableArguments {
     @Option(name: .long, help: "Path to an AppStage JSON case plan.")
     var config: String?
 
-    @Option(name: .long, help: "Named suite to run from the case plan.")
+    @Option(name: .long, help: "Named suite declared by the Host or an explicit case plan.")
     var suite: String?
 
     @Option(name: .long, help: "Include case IDs matching this glob. May be repeated.")
@@ -462,10 +464,7 @@ struct StageCaseSelectionArguments: ParsableArguments {
     var exclude: [String] = []
 
     func loadPlan() throws -> (plan: StageCasePlan?, url: URL?) {
-        guard let config else {
-            if suite != nil { throw StageCasePlanError.suiteRequiresConfiguration }
-            return (nil, nil)
-        }
+        guard let config else { return (nil, nil) }
         let url = URL(fileURLWithPath: (config as NSString).expandingTildeInPath).standardizedFileURL
         do {
             return (try StageCasePlan.load(from: url), url)

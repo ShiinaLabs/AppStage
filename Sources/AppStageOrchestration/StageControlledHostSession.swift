@@ -99,9 +99,12 @@ public final class StageControlledHostSession {
         return result.scenarios ?? []
     }
 
-    public func listCases(timeout: Duration = .seconds(30)) async throws -> [StageCaseMetadata] {
+    public func captureCatalog(timeout: Duration = .seconds(30)) async throws -> StageCaptureCatalog {
         let result = try await request(.listCases, timeout: timeout)
-        return result.cases ?? []
+        guard let catalog = result.captureCatalog else {
+            throw StageControlError.invalidState("Host discovery did not return a capture catalog")
+        }
+        return catalog
     }
 
     public func prepare(_ caseID: StageCaseID, timeout: Duration = .seconds(30)) async throws {

@@ -45,6 +45,7 @@ final class StageBatchSnapshotWorkflow {
     private let includesDemoCursor: Bool
     private let timeoutSeconds: Int
     private let casePlan: StageCasePlan?
+    private let captureCatalog: StageCaptureCatalog?
     private let casePlanPath: String?
     private let suite: String?
     private let filters: [String]
@@ -63,6 +64,7 @@ final class StageBatchSnapshotWorkflow {
         includesDemoCursor: Bool,
         timeoutSeconds: Int = 30,
         casePlan: StageCasePlan? = nil,
+        captureCatalog: StageCaptureCatalog? = nil,
         casePlanPath: String? = nil,
         suite: String? = nil,
         filters: [String] = [],
@@ -80,6 +82,7 @@ final class StageBatchSnapshotWorkflow {
         self.includesDemoCursor = includesDemoCursor
         self.timeoutSeconds = timeoutSeconds
         self.casePlan = casePlan
+        self.captureCatalog = captureCatalog
         self.casePlanPath = casePlanPath
         self.suite = suite
         self.filters = filters
@@ -91,9 +94,10 @@ final class StageBatchSnapshotWorkflow {
         guard hostCases.contains(where: { !$0.capturePointIDs.isEmpty }) else {
             throw StageBatchSnapshotError.noCapturePoints
         }
+        let catalogPlan = try captureCatalog.map { try Self.casePlan(from: $0) }
         let selectedCases = try StageCasePlan.select(
             from: hostCases,
-            using: casePlan,
+            using: casePlan ?? catalogPlan,
             kind: .capturePoint,
             suite: suite,
             includes: filters,
@@ -181,6 +185,22 @@ final class StageBatchSnapshotWorkflow {
         try write(manifest, to: manifestURL)
         print("Snapshot batch \(manifest.status). Manifest: \(manifestURL.path)")
         if failures > 0 { throw StageBatchSnapshotError.itemsFailed(failures) }
+    }
+
+    private static func casePlan(from catalog: StageCaptureCatalog) throws -> StageCasePlan {
+        var suites: [String: [String]] = [:]
+        for suite in catalog.suites {
+            guard suites.updateValue(suite.caseIDs.map(\.rawValue), forKey: suite.id) == nil else {
+                throw StageCasePlanError.duplicateSuite(suite.id)
+            }
+        }
+        let plan = StageCasePlan(
+            cases: catalog.cases.map { StageCasePlan.Case(id: $0.id.rawValue, scenarioID: nil, capturePointID: nil) },
+            defaultSuite: catalog.defaultSuite,
+            suites: suites
+        )
+        try plan.validate()
+        return plan
     }
 
     private func prepareOutputDirectory() throws {

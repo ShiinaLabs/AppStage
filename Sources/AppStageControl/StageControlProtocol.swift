@@ -118,20 +118,20 @@ public struct StageControlSnapshot: Codable, Sendable, Equatable {
     public let scenarioID: StageScenarioID?
     public let positionMilliseconds: Int64?
     public let scenarios: [StageScenarioMetadata]?
-    public let cases: [StageCaseMetadata]?
+    public let captureCatalog: StageCaptureCatalog?
 
     public init(
         state: StageControlState,
         scenarioID: StageScenarioID? = nil,
         positionMilliseconds: Int64? = nil,
         scenarios: [StageScenarioMetadata]? = nil,
-        cases: [StageCaseMetadata]? = nil
+        captureCatalog: StageCaptureCatalog? = nil
     ) {
         self.state = state
         self.scenarioID = scenarioID
         self.positionMilliseconds = positionMilliseconds
         self.scenarios = scenarios
-        self.cases = cases
+        self.captureCatalog = captureCatalog
     }
 }
 

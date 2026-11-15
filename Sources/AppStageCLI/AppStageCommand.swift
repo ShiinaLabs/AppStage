@@ -203,7 +203,7 @@ struct TestCommand: AsyncParsableCommand {
                     timeout: .seconds(timeout),
                     existingApplicationPolicy: replaceExisting ? .replace : .reject
                 ) { session in
-                    try await session.listCases(timeout: .seconds(timeout))
+                    try await session.captureCatalog(timeout: .seconds(timeout)).cases
                 }
             },
             runCase: { caseID, timeout in
@@ -408,16 +408,44 @@ struct CaptureAllSnapshotsCommand: AsyncParsableCommand {
 
     func run() async throws {
         let (casePlan, casePlanURL) = try selection.loadPlan()
-        let defaults = casePlan?.defaults?.captureAllSnapshots
-        guard let outputDirectory = outputDirectory ?? defaults?.outputDirectory else {
-            throw ValidationError("Provide --output-dir or configure defaults.captureAllSnapshots.outputDirectory.")
+        let appURL = URL(fileURLWithPath: app).standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: appURL.path, isDirectory: &isDirectory), isDirectory.boolValue,
+              let bundleIdentifier = Bundle(url: appURL)?.bundleIdentifier, !bundleIdentifier.isEmpty else {
+            throw ValidationError("--app must point to an app bundle with a bundle identifier.")
         }
-        let timeout = self.timeout ?? defaults?.timeoutSeconds ?? 30
-        let horizontalMargin = self.horizontalMargin ?? defaults?.horizontalMargin ?? 220
-        let verticalMargin = self.verticalMargin ?? defaults?.verticalMargin ?? 120
-        let includeWindowShadow = !disableWindowShadow && (self.includeWindowShadow || defaults?.includeWindowShadow == true)
-        let nativeSize = !disableNativeSize && (self.nativeSize || defaults?.nativeSize == true)
-        let includeDemoCursor = !disableDemoCursor && (self.includeDemoCursor || defaults?.includeDemoCursor == true)
+        let discoveryTimeout = Duration.seconds(self.timeout ?? casePlan?.defaults?.captureAllSnapshots?.timeoutSeconds ?? 90)
+        let captureCatalog = try await discoverSnapshotCatalog(
+            appURL: appURL,
+            bundleIdentifier: bundleIdentifier,
+            timeout: discoveryTimeout,
+            policy: replaceExisting ? .replace : .reject
+        )
+        let defaults = casePlan?.defaults?.captureAllSnapshots
+        let selectedSuite = selection.suite ?? casePlan?.defaultSuite
+            ?? (casePlan == nil ? captureCatalog.defaultSuite : nil)
+        let suiteDefaults = captureCatalog.suites.first(where: { $0.id == selectedSuite })?.captureAllSnapshotsDefaults
+        let catalogDefaults = captureCatalog.captureAllSnapshotsDefaults
+        guard let outputDirectory = self.outputDirectory
+            ?? defaults?.outputDirectory
+            ?? suiteDefaults?.outputDirectory
+            ?? catalogDefaults?.outputDirectory else {
+            throw ValidationError("The Host has no output directory for this capture suite. Provide --output-dir.")
+        }
+        let timeout = self.timeout ?? defaults?.timeoutSeconds ?? suiteDefaults?.timeoutSeconds
+            ?? catalogDefaults?.timeoutSeconds ?? 30
+        let horizontalMargin = self.horizontalMargin ?? defaults?.horizontalMargin ?? suiteDefaults?.horizontalMargin
+            ?? catalogDefaults?.horizontalMargin ?? 220
+        let verticalMargin = self.verticalMargin ?? defaults?.verticalMargin ?? suiteDefaults?.verticalMargin
+            ?? catalogDefaults?.verticalMargin ?? 120
+        let includeWindowShadow = !disableWindowShadow && (self.includeWindowShadow
+            || (defaults?.includeWindowShadow ?? suiteDefaults?.includeWindowShadow
+                ?? catalogDefaults?.includeWindowShadow ?? false))
+        let nativeSize = !disableNativeSize && (self.nativeSize
+            || (defaults?.nativeSize ?? suiteDefaults?.nativeSize ?? catalogDefaults?.nativeSize ?? false))
+        let includeDemoCursor = !disableDemoCursor && (self.includeDemoCursor
+            || (defaults?.includeDemoCursor ?? suiteDefaults?.includeDemoCursor
+                ?? catalogDefaults?.includeDemoCursor ?? false))
         guard !nativeSize || !includeDemoCursor else {
             throw ValidationError("--native-size cannot be combined with --include-demo-cursor.")
         }
@@ -426,48 +454,34 @@ struct CaptureAllSnapshotsCommand: AsyncParsableCommand {
               horizontalMargin >= 0, verticalMargin >= 0 else {
             throw ValidationError("Capture margins must be finite, non-negative numbers.")
         }
-        let appURL = URL(fileURLWithPath: app).standardizedFileURL
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: appURL.path, isDirectory: &isDirectory), isDirectory.boolValue,
-              let bundleIdentifier = Bundle(url: appURL)?.bundleIdentifier, !bundleIdentifier.isEmpty else {
-            throw ValidationError("--app must point to an app bundle with a bundle identifier.")
-        }
-        let outputPath: String
-        if let explicitOutput = self.outputDirectory {
-            outputPath = (explicitOutput as NSString).expandingTildeInPath
-        } else if let casePlan, let casePlanURL {
-            outputPath = casePlan.resolvedPath(outputDirectory, relativeTo: casePlanURL)
+        let expandedOutputPath = (outputDirectory as NSString).expandingTildeInPath
+        let outputBase: URL
+        if self.outputDirectory == nil, defaults?.outputDirectory != nil, let casePlanURL {
+            outputBase = casePlanURL.deletingLastPathComponent()
         } else {
-            outputPath = (outputDirectory as NSString).expandingTildeInPath
+            outputBase = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
         }
-        let outputURL = URL(fileURLWithPath: outputPath).standardizedFileURL
+        let outputURL = URL(fileURLWithPath: expandedOutputPath, relativeTo: outputBase).standardizedFileURL
         let captureTask = Task { @MainActor in
             let workflow = StageBatchSnapshotWorkflow(
-                discoverCases: {
-                    try await discoverSnapshotCases(
-                    appURL: appURL,
-                    bundleIdentifier: bundleIdentifier,
-                    timeout: .seconds(timeout),
-                    policy: replaceExisting ? .replace : .reject
-                )
-            },
-            capturePoint: { caseID, scenarioID, pointID, includesWindowShadow, fileURL in
-                try await captureScenarioSnapshot(
-                    appURL: appURL,
-                    bundleIdentifier: bundleIdentifier,
-                    scenarioID: scenarioID,
-                    caseID: caseID,
-                    checkpointID: pointID,
-                    outputURL: fileURL,
-                    timeout: .seconds(timeout),
-                    horizontalMargin: horizontalMargin,
-                    verticalMargin: verticalMargin,
-                    includeWindowShadow: includesWindowShadow,
-                    nativeSize: nativeSize,
-                    includeDemoCursor: includeDemoCursor,
-                    policy: replaceExisting ? .replace : .reject
-                )
-            },
+                discoverCases: { captureCatalog.cases },
+                capturePoint: { caseID, scenarioID, pointID, includesWindowShadow, fileURL in
+                    try await captureScenarioSnapshot(
+                        appURL: appURL,
+                        bundleIdentifier: bundleIdentifier,
+                        scenarioID: scenarioID,
+                        caseID: caseID,
+                        checkpointID: pointID,
+                        outputURL: fileURL,
+                        timeout: .seconds(timeout),
+                        horizontalMargin: horizontalMargin,
+                        verticalMargin: verticalMargin,
+                        includeWindowShadow: includesWindowShadow,
+                        nativeSize: nativeSize,
+                        includeDemoCursor: includeDemoCursor,
+                        policy: replaceExisting ? .replace : .reject
+                    )
+                },
                 outputDirectory: outputURL,
                 bundleIdentifier: bundleIdentifier,
                 horizontalMargin: nativeSize ? 0 : horizontalMargin,
@@ -478,8 +492,9 @@ struct CaptureAllSnapshotsCommand: AsyncParsableCommand {
                 includesDemoCursor: includeDemoCursor,
                 timeoutSeconds: timeout,
                 casePlan: casePlan,
+                captureCatalog: captureCatalog,
                 casePlanPath: casePlanURL?.path,
-                suite: selection.suite,
+                suite: selectedSuite,
                 filters: selection.filter,
                 exclusions: selection.exclude
             )
@@ -1387,23 +1402,23 @@ private func capturePNG(
 }
 
 @MainActor
-private func discoverSnapshotCases(
+private func discoverSnapshotCatalog(
     appURL: URL,
     bundleIdentifier: String,
     timeout: Duration,
     policy: StageExistingApplicationPolicy
-) async throws -> [StageCaseMetadata] {
-    let cases = try await StageControlledHostSession.withSession(
+) async throws -> StageCaptureCatalog {
+    let catalog = try await StageControlledHostSession.withSession(
         appURL: appURL,
         bundleIdentifier: bundleIdentifier,
         mode: .discoverScenarios,
         timeout: timeout,
         existingApplicationPolicy: policy
     ) { session in
-        try await session.listCases(timeout: timeout)
+        try await session.captureCatalog(timeout: timeout)
     }
-    guard !cases.isEmpty else { throw StageBatchRecordError.noScenarios }
-    return cases
+    guard !catalog.cases.isEmpty else { throw StageBatchRecordError.noScenarios }
+    return catalog
 }
 
 @MainActor

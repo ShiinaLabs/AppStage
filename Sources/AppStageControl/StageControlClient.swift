@@ -139,12 +139,12 @@ public actor StageControlClient {
             if machine.state == .failed { return }
             machine.succeeded(request.command, loadedScenarioID: loadedScenarioID)
             let scenarios = request.command == .listScenarios ? await host.availableScenarios() : nil
-            let cases = request.command == .listCases ? await host.availableCases() : nil
+            let captureCatalog = request.command == .listCases ? await host.captureCatalog() : nil
             let snapshot = StageControlSnapshot(
                 state: machine.state,
                 scenarioID: machine.scenarioID,
                 scenarios: scenarios,
-                cases: cases
+                captureCatalog: captureCatalog
             )
             try await socket.send(.response(.init(requestID: request.id, result: .success(snapshot))))
             guard !closed && !Task.isCancelled && machine.state != .finished && machine.state != .failed else { return }

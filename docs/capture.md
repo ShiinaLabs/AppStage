@@ -120,10 +120,17 @@ appstage capture-all --app "/Applications/Example.app" \
 
 ## Case plans and suites
 
-A versioned JSON case plan lets Host-declared Cases be selected without a wrapper
-script. The intended model treats a Case as the execution and reporting unit and
-an Artifact (video, image, or another format) as its output. See
-[Architecture](architecture.md) for the model and current implementation gaps.
+Hosts publish static capture Cases, ordered suites, a default suite, and
+`capture-all-snapshots` defaults through `StageCaptureCatalog`. This lets a Host
+provide a ready-to-run screenshot batch without a JSON plan or wrapper script.
+Relative output directories from the Host catalog resolve from the CLI's current
+working directory. Explicit CLI options override Host defaults.
+
+A versioned JSON case plan remains available when a caller needs to define its
+own batch selection. The intended model treats a Case as the execution and
+reporting unit and an Artifact (video, image, or another format) as its output.
+See [Architecture](architecture.md) for the model and current implementation
+gaps.
 
 Currently, case plans represent recording entries with `scenarioID` and static
 snapshot entries with both `scenarioID` and `capturePointID`; the CLI routes them
@@ -187,7 +194,10 @@ corresponding enabled configuration defaults. The selected order is explicit `--
 `defaultSuite`, then the case list order. A suite may contain Scenario cases for `capture-all` and
 `verify`, or capture point cases for `capture-all-snapshots`; selecting a case of
 the wrong kind, an unknown Host reference, or no cases is an error before output
-is created. Without a case plan, batch commands keep running all discovered items.
+is created. Without a case plan, `capture-all-snapshots` uses the Host's default
+suite when present, or all discovered capture Cases when no default suite exists.
+Recording and verification commands continue to use all discovered Scenarios
+when no case plan is supplied.
 
 ## Reliability verification
 

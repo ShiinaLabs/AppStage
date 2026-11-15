@@ -232,13 +232,13 @@ private final class FixtureRuntime: StageScenarioControlling {
         throw StageControlError.unsupported("Fixture Host has no semantic actions")
     }
 
-    func availableCases() async -> [StageCaseMetadata] {
-        [StageCaseMetadata(
+    func captureCatalog() async -> StageCaptureCatalog {
+        StageCaptureCatalog(cases: [StageCaseMetadata(
             id: StageCaseID(Self.scenarioID.rawValue),
             scenarioID: Self.scenarioID,
             displayName: "Reliability Smoke",
             capturePointIDs: [Self.summaryCapturePointID]
-        )]
+        )])
     }
 
     func availableScenarios() async -> [StageScenarioMetadata] {
