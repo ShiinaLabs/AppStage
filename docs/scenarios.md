@@ -31,13 +31,12 @@ The point ID is product-neutral; its mapping to data, layout, or animation state
 belongs to the Host. AppStage does not infer UI state from a playback timestamp
 or a fixed delay.
 
-Batch commands can select these Host declarations through a versioned JSON case
-plan. Scenario cases reference `scenarioID`; static screenshot cases reference
-both `scenarioID` and `capturePointID`. The case plan gives each reference a
-stable case ID and groups IDs into ordered suites. It does not define interaction
-steps, product state, UI readiness, or business assertions; those remain Host
-responsibilities. See [Capture](capture.md#case-plans-and-suites) for the format
-and CLI selection rules.
+The current case plan represents recording entries with `scenarioID` and static
+snapshot entries with both `scenarioID` and `capturePointID`, routing them through
+separate CLI workflows. This is an implementation limitation. The intended model
+uses one Case as the selection and execution unit; video and image are Artifact
+outputs, not Case kinds. See [Architecture](architecture.md) and
+[Capture](capture.md#case-plans-and-suites) for details.
 
 ## Choose the right interaction
 

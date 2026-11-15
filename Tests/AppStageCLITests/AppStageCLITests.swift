@@ -14,6 +14,45 @@ final class AppStageCLITests: XCTestCase {
         XCTAssertTrue(result.standardOutput.contains("capture-snapshot"))
         XCTAssertTrue(result.standardOutput.contains("capture-all-snapshots"))
         XCTAssertTrue(result.standardOutput.contains("run"))
+        XCTAssertTrue(result.standardOutput.contains("test"))
+    }
+
+    func testTestHelpAndOptions() throws {
+        let result = try runCLI(["test", "--help"])
+
+        XCTAssertEqual(result.status, 0, result.standardError)
+        XCTAssertTrue(result.standardOutput.contains("--filter"))
+        XCTAssertTrue(result.standardOutput.contains("--exclude"))
+        XCTAssertTrue(result.standardOutput.contains("--list-cases"))
+        XCTAssertTrue(result.standardOutput.contains("--timeout"))
+    }
+
+    func testTestParsesRepeatedFiltersAndTimeout() throws {
+        let command = try TestCommand.parse([
+            "--app", "/Applications/Example.app",
+            "--filter", "network-*",
+            "--filter", "settings?",
+            "--exclude", "*slow*",
+            "--timeout", "73",
+            "--list-cases",
+        ])
+
+        XCTAssertEqual(command.filter, ["network-*", "settings?"])
+        XCTAssertEqual(command.exclude, ["*slow*"])
+        XCTAssertEqual(command.timeout, 73)
+        XCTAssertTrue(command.listCases)
+    }
+
+    func testTestTimeoutValidationAcceptsInclusiveBoundsOnly() throws {
+        try TestCommand.validateTimeout(1)
+        try TestCommand.validateTimeout(600)
+        XCTAssertThrowsError(try TestCommand.validateTimeout(0))
+        XCTAssertThrowsError(try TestCommand.validateTimeout(601))
+    }
+
+    func testTestReturnsFailureExitCodeWhenAnyCaseFails() throws {
+        XCTAssertNoThrow(try TestCommand.validateNoFailures(0))
+        XCTAssertThrowsError(try TestCommand.validateNoFailures(1))
     }
 
     func testRunHelpExplainsUnrecordedScenarioExecution() throws {

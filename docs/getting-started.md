@@ -47,8 +47,9 @@ product-specific models and navigation inside the Host.
 ## 6. Connect the control client
 
 Create `StageControlClient` with the parsed loopback endpoint, token, session ID,
-and Host bundle identifier. Connect it only after the controlled runtime and
-main window are ready to accept control.
+and Host bundle identifier. Connect after the controlled runtime is ready to
+accept control. Registration/discovery must not require creating a visible
+product window; window creation is separate from test registration.
 
 ## 7. Configure the controlled window
 

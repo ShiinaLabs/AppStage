@@ -10,13 +10,13 @@ final class StageBatchSnapshotWorkflowTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: outputDirectory) }
         let workflow = StageBatchSnapshotWorkflow(
-            discoverScenarios: {
-                [StageScenarioMetadata(
-                    id: StageScenarioID("overview"),
-                    capturePointIDs: [StageCapturePointID("summary"), StageCapturePointID("details")]
-                )]
+            discoverCases: {
+                [
+                    StageCaseMetadata(id: StageCaseID("overview-summary"), scenarioID: StageScenarioID("overview"), capturePointIDs: [StageCapturePointID("summary")]),
+                    StageCaseMetadata(id: StageCaseID("overview-details"), scenarioID: StageScenarioID("overview"), capturePointIDs: [StageCapturePointID("details")]),
+                ]
             },
-            capturePoint: { _, _, _ in try await Task.sleep(for: .seconds(60)) },
+            capturePoint: { _, _, _, _, _ in try await Task.sleep(for: .seconds(60)) },
             outputDirectory: outputDirectory,
             bundleIdentifier: "example.app",
             horizontalMargin: 12,
@@ -45,13 +45,13 @@ final class StageBatchSnapshotWorkflowTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: outputDirectory) }
         var attempted: [String] = []
         let workflow = StageBatchSnapshotWorkflow(
-            discoverScenarios: {
-                [StageScenarioMetadata(
-                    id: StageScenarioID("overview"),
-                    capturePointIDs: [StageCapturePointID("summary"), StageCapturePointID("details")]
-                )]
+            discoverCases: {
+                [
+                    StageCaseMetadata(id: StageCaseID("overview-summary"), scenarioID: StageScenarioID("overview"), capturePointIDs: [StageCapturePointID("summary")]),
+                    StageCaseMetadata(id: StageCaseID("overview-details"), scenarioID: StageScenarioID("overview"), capturePointIDs: [StageCapturePointID("details")]),
+                ]
             },
-            capturePoint: { _, pointID, outputURL in
+            capturePoint: { _, _, pointID, _, outputURL in
                 attempted.append(pointID.rawValue)
                 if pointID.rawValue == "summary" { throw StageControlError.remoteFailure("capture failed") }
                 try Data("png".utf8).write(to: outputURL)
@@ -77,27 +77,27 @@ final class StageBatchSnapshotWorkflowTests: XCTestCase {
         XCTAssertEqual(manifest["status"] as? String, "failed")
         let items = try XCTUnwrap(manifest["items"] as? [[String: Any]])
         XCTAssertEqual(items.map { $0["status"] as? String }, ["failed", "completed"])
-        XCTAssertEqual(items.map { $0["output"] as? String }, ["overview--summary.png", "overview--details.png"])
-        XCTAssertEqual(manifest["schemaVersion"] as? Int, 2)
-        XCTAssertEqual(items.map { $0["caseID"] as? String }, ["8:overview7:summary", "8:overview7:details"])
+        XCTAssertEqual(items.map { $0["output"] as? String }, ["overview-summary--summary.png", "overview-details--details.png"])
+        XCTAssertEqual(manifest["schemaVersion"] as? Int, 3)
+        XCTAssertEqual(items.map { $0["caseID"] as? String }, ["overview-summary", "overview-details"])
     }
 
     func testCasePlanSelectionIsRecordedAndValidatedBeforeOutputDirectoryCreation() async throws {
         let outputDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: outputDirectory) }
-        let scenarios = [StageScenarioMetadata(
-            id: StageScenarioID("overview"),
-            capturePointIDs: [StageCapturePointID("summary"), StageCapturePointID("details")]
-        )]
+        let cases = [
+            StageCaseMetadata(id: StageCaseID("overview-summary"), scenarioID: StageScenarioID("overview"), capturePointIDs: [StageCapturePointID("summary")]),
+            StageCaseMetadata(id: StageCaseID("overview-details"), scenarioID: StageScenarioID("overview"), capturePointIDs: [StageCapturePointID("details")]),
+        ]
         let plan = StageCasePlan(
             cases: [StageCasePlan.Case(id: "overview-summary", scenarioID: "overview", capturePointID: "summary")],
             suites: ["smoke": ["overview-summary"]]
         )
         var captured: [String] = []
         let workflow = StageBatchSnapshotWorkflow(
-            discoverScenarios: { scenarios },
-            capturePoint: { _, pointID, outputURL in
+            discoverCases: { cases },
+            capturePoint: { _, _, pointID, _, outputURL in
                 captured.append(pointID.rawValue)
                 try Data("png".utf8).write(to: outputURL)
             },
@@ -126,8 +126,8 @@ final class StageBatchSnapshotWorkflowTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: outputDirectory) }
         let workflow = StageBatchSnapshotWorkflow(
-            discoverScenarios: { [StageScenarioMetadata(id: StageScenarioID("overview"))] },
-            capturePoint: { _, _, _ in XCTFail("Capture must not start") },
+            discoverCases: { [StageCaseMetadata(id: StageCaseID("overview"), scenarioID: StageScenarioID("overview"))] },
+            capturePoint: { _, _, _, _, _ in XCTFail("Capture must not start") },
             outputDirectory: outputDirectory,
             bundleIdentifier: "example.app",
             horizontalMargin: 12,
@@ -149,10 +149,10 @@ final class StageBatchSnapshotWorkflowTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: outputDirectory) }
         let workflow = StageBatchSnapshotWorkflow(
-            discoverScenarios: {
-                [StageScenarioMetadata(id: StageScenarioID("overview"), capturePointIDs: [StageCapturePointID("summary")])]
+            discoverCases: {
+                [StageCaseMetadata(id: StageCaseID("overview-summary"), scenarioID: StageScenarioID("overview"), capturePointIDs: [StageCapturePointID("summary")])]
             },
-            capturePoint: { _, _, _ in XCTFail("Capture must not start") },
+            capturePoint: { _, _, _, _, _ in XCTFail("Capture must not start") },
             outputDirectory: outputDirectory,
             bundleIdentifier: "example.app",
             horizontalMargin: 12,

@@ -13,7 +13,7 @@ struct AppStageCommand: AsyncParsableCommand {
         commandName: "appstage",
         abstract: "Launch, inspect, and capture macOS app scenarios.",
         subcommands: [
-            ListCommand.self, ScenariosCommand.self, RunCommand.self,
+            ListCommand.self, ScenariosCommand.self, RunCommand.self, TestCommand.self,
             SnapshotCommand.self, CaptureSnapshotCommand.self, CaptureAllSnapshotsCommand.self, RecordCommand.self, CaptureAllCommand.self, VerifyCommand.self,
             DoctorCommand.self,
         ]
@@ -140,6 +140,119 @@ private func discoverScenarios(
             let duration = scenario.durationMilliseconds.map { "\t\($0) ms" } ?? ""
             print("\(scenario.id.rawValue)\(name)\(duration)")
         }
+    }
+}
+
+struct TestCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "test",
+        abstract: "List and run Host-registered Cases."
+    )
+
+    @Option(name: .long, help: "Path to the target .app bundle.")
+    var app: String
+
+    @Option(name: .long, help: "Target app bundle identifier. Defaults to the app's bundle identifier.")
+    var bundleID: String?
+
+    @Option(name: .long, help: "Include Case IDs matching this glob. May be repeated.")
+    var filter: [String] = []
+
+    @Option(name: .long, help: "Exclude Case IDs matching this glob. May be repeated.")
+    var exclude: [String] = []
+
+    @Flag(name: .long, help: "List matching Host Cases without executing them.")
+    var listCases = false
+
+    @Option(name: .long, help: "Timeout in seconds for discovery and each Case (default: 60).")
+    var timeout = 60
+
+    @Flag(name: .long, help: "Terminate an already running target app and launch a new controlled instance.")
+    var replaceExisting = false
+
+    static func validateTimeout(_ timeout: Int) throws {
+        guard (1...600).contains(timeout) else {
+            throw ValidationError("--timeout must be between 1 and 600 seconds.")
+        }
+    }
+
+    static func validateNoFailures(_ failureCount: Int) throws {
+        guard failureCount == 0 else { throw ExitCode.failure }
+    }
+
+    func run() async throws {
+        try Self.validateTimeout(timeout)
+        let applicationURL = URL(fileURLWithPath: app).standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: applicationURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue,
+              let applicationBundleID = Bundle(url: applicationURL)?.bundleIdentifier,
+              !applicationBundleID.isEmpty else {
+            throw ValidationError("--app must point to an app bundle with a bundle identifier.")
+        }
+        if let bundleID, bundleID != applicationBundleID {
+            throw ValidationError("--bundle-id must match the app bundle identifier (\(applicationBundleID)).")
+        }
+
+        let workflow = await StageTestWorkflow(
+            discoverCases: { timeout in
+                try await StageControlledHostSession.withSession(
+                    appURL: applicationURL,
+                    bundleIdentifier: applicationBundleID,
+                    mode: .discoverScenarios,
+                    timeout: .seconds(timeout),
+                    existingApplicationPolicy: replaceExisting ? .replace : .reject
+                ) { session in
+                    try await session.listCases(timeout: .seconds(timeout))
+                }
+            },
+            runCase: { caseID, timeout in
+                try await StageControlledHostSession.withSession(
+                    appURL: applicationURL,
+                    bundleIdentifier: applicationBundleID,
+                    mode: .captureCase(caseID),
+                    timeout: .seconds(timeout),
+                    existingApplicationPolicy: .reject
+                ) { session in
+                    try await session.prepare(caseID, timeout: .seconds(timeout))
+                    try await session.play(timeout: .seconds(timeout))
+                    _ = try await session.waitForEvent(.finished, timeout: .seconds(timeout))
+                }
+            }
+        )
+        let report = try await workflow.run(
+            timeout: timeout,
+            filters: filter,
+            exclusions: exclude,
+            listOnly: listCases
+        ) { event in
+            switch event {
+            case let .selected(count):
+                print("Running \(count) Case(s).")
+            case let .started(id):
+                print("Starting Case: \(id)")
+            case let .finished(result):
+                if let error = result.error {
+                    print("Failed: \(result.id) — \(error)")
+                } else {
+                    print("Passed: \(result.id)")
+                }
+            }
+        }
+
+        if listCases {
+            guard !report.selectedCases.isEmpty else {
+                print("No Cases matched the supplied filters.")
+                return
+            }
+            for testCase in report.selectedCases {
+                print(testCase.id)
+            }
+            return
+        }
+
+        print("Completed: \(report.results.count - report.failureCount) passed, \(report.failureCount) failed.")
+        try Self.validateNoFailures(report.failureCount)
     }
 }
 

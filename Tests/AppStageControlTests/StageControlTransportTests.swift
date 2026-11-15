@@ -38,6 +38,10 @@ private actor ExampleHost: StageScenarioControlling {
     }
 
     func loadScenario(_ id: StageScenarioID) async throws { scenarioID = id }
+    func loadCase(_ id: StageCaseID) async throws -> StageScenarioID {
+        throw StageControlError.remoteFailure("ExampleHost does not register Cases: \(id.rawValue)")
+    }
+    func availableCases() async -> [StageCaseMetadata] { [] }
     func prepareScenario() async throws {
         prepareStarted.yield(())
         if cancellablePrepare {

@@ -8,6 +8,29 @@ AppStage provides these capture commands:
 - `record` launches and records one Scenario to a MOV.
 - `capture-all` discovers Scenarios and writes one MOV for each, plus `manifest.json`.
 - `verify` repeats every discovered Scenario in fresh processes and validates each MOV.
+- `test` lists and runs Host-registered Cases with Case ID filters.
+
+## Case test runner
+
+List the Cases advertised by a Host:
+
+```sh
+appstage test --app "/Applications/Example.app" --list-cases
+```
+
+Run one exact Case ID, use `*` / `?` glob patterns, or repeat `--filter` to
+include several patterns. Use `--exclude` to omit matching IDs:
+
+```sh
+appstage test --app "/Applications/Example.app" --filter network-roaming
+appstage test --app "/Applications/Example.app" --filter 'network-*'
+appstage test --app "/Applications/Example.app" --filter '*' --exclude '*slow*'
+```
+
+A filter without wildcards matches the Case ID exactly, including IDs that
+contain `-`. The list command applies the same filters and prints matching Case
+IDs. Selected Cases run sequentially in separate controlled Host processes; a
+failed Case is reported and the remaining selected Cases still run.
 
 ## Static scenario screenshots
 
@@ -97,10 +120,15 @@ appstage capture-all --app "/Applications/Example.app" \
 
 ## Case plans and suites
 
-A versioned JSON case plan lets a Host's reusable Scenario and capture point IDs
-be selected without a wrapper script. Cases only reference Host declarations;
-the Host still owns Scenario behavior, product data, static UI preparation, and
-business assertions.
+A versioned JSON case plan lets Host-declared Cases be selected without a wrapper
+script. The intended model treats a Case as the execution and reporting unit and
+an Artifact (video, image, or another format) as its output. See
+[Architecture](architecture.md) for the model and current implementation gaps.
+
+Currently, case plans represent recording entries with `scenarioID` and static
+snapshot entries with both `scenarioID` and `capturePointID`; the CLI routes them
+to separate workflows. This is a current implementation limitation, not the
+intended distinction between Cases.
 
 ```json
 {
@@ -238,8 +266,8 @@ clip over a high-contrast background before delivery.
 
 ## Manifest and failures
 
-Recording and snapshot `manifest.json` files use schema version 2 and are
-updated as the batch proceeds. They record the case plan path, selected suite,
+Recording `manifest.json` uses schema version 2; snapshot `manifest.json` uses
+schema version 3. Both are updated as the batch proceeds. They record the case plan path, selected suite,
 filter patterns, and each selected case ID alongside its Host target and status.
 Recording entries use `pending`, `recording`, `completed`, `failed`, or
 `cancelled`; snapshot entries use `pending`, `capturing`, `completed`, `failed`,

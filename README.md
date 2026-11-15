@@ -1,8 +1,8 @@
 # AppStage
 
-AppStage is a deterministic demo-capture framework for macOS apps. A host app
-defines repeatable scenarios; AppStage drives them and records clean PNG and
-MOV assets from the command line.
+AppStage is a product-neutral test runner for repeatable macOS app experiences.
+Host apps register Cases and own deterministic behavior; AppStage selects and
+executes Cases and coordinates output Artifacts such as PNG and MOV files.
 
 ## What it does
 
@@ -11,12 +11,19 @@ MOV assets from the command line.
 - Uses real macOS Accessibility actions for visible UI controls.
 - Captures screenshots and MOV recordings.
 - Composes recordings onto a custom video canvas.
-- Records batches with a fresh app process for each scenario.
-- Repeats discovered scenarios with `appstage verify` and validates each MOV.
+- Runs UI work sequentially with process isolation where required.
+- Validates recorded MOV outputs with `appstage verify`.
+
+Current batch commands still discover through a launched Host process and route
+recording and snapshots through separate workflows. These are documented gaps;
+see [Architecture](docs/architecture.md).
 
 ## How it works
 
-`Host scenario → AppStage control → visible interaction → screen capture → PNG / MOV`
+`register Cases → select by suite/filter → execute selected Cases → produce Artifacts → report results`
+
+See [Architecture](docs/architecture.md) for the Case, Scenario, Artifact, and
+Run model, including current implementation gaps.
 
 ## Example
 
@@ -34,6 +41,7 @@ appstage verify --app "/Applications/Example.app" \
 
 ## Documentation
 
+- [Architecture](docs/architecture.md)
 - [Getting started](docs/getting-started.md)
 - [Designing scenarios](docs/scenarios.md)
 - [Capture commands and output](docs/capture.md)

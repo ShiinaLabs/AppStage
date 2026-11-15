@@ -2,8 +2,10 @@
 
 ## Project purpose
 
-AppStage is a product-neutral framework and CLI for stable, repeatable macOS
-app demo capture. Host apps own scenario content and product behavior.
+AppStage is a product-neutral test runner for repeatable macOS app experiences.
+Host apps register Cases and own deterministic behavior; AppStage selects and
+executes Cases and coordinates output Artifacts. Read [the architecture](docs/architecture.md)
+for the intended model and the current implementation gaps.
 
 ## Scope boundary
 
@@ -19,6 +21,7 @@ music, final-video assembly, or general computer use.
 - `Sources/AppStageMac/` — macOS window configuration and demo cursor.
 - `Sources/AppStageControl/` — Host control client, protocol, and session state.
 - `Sources/AppStageCapture/` — ScreenCaptureKit, screenshots, video recording, and canvas composition.
+- `Sources/AppStageOrchestration/` — controlled Host process sessions, accessibility control, and app lifecycle.
 - `Sources/AppStageCLI/` — `appstage` commands and capture workflows.
 - `Tests/` — module-level and CLI tests.
 
@@ -34,10 +37,10 @@ music, final-video assembly, or general computer use.
 ## Invariants
 
 - AppStage is product-neutral; Host-specific code and strings stay in the Host.
-- The Host owns its deterministic data providers and Scenario behavior.
-- A Scenario is the isolation unit, not a page or route.
-- `capture-all` launches a fresh process for discovery and a fresh process for each Scenario.
-- Batch recording is sequential. Never record two Scenarios at once.
+- The Host owns Case registration, deterministic data providers, and product behavior.
+- A Case is the selection and reporting unit. A Scenario is reusable Host behavior, not a page or route; process isolation is an execution policy.
+- Discovery must not show product UI or execute Cases. Current batch workflows launch a discovery process before filtering; this is a known gap, not an invariant.
+- Batch execution is sequential. Never execute two UI Cases at once.
 - Visible macOS controls use Accessibility interaction. Hidden deterministic transitions may use semantic actions.
 - Do not synthesize physical `CGEvent` input without a demonstrated requirement.
 - Fail closed when capture quality or complete-frame writing cannot be maintained.
@@ -54,6 +57,8 @@ music, final-video assembly, or general computer use.
 
 ## Integration boundary
 
-The Host chooses the initial route and deterministic state from launch
-configuration. AppStage controls the named Scenario and captures its window; it
-must never learn Host navigation, domain models, or product-specific content.
+For Case execution, the Host chooses deterministic state and any required
+initial route from launch configuration. AppStage coordinates the Case lifecycle
+and its Artifact producers; it must never learn Host navigation, domain models,
+or product-specific content. Registration/discovery must not require a visible
+product window.

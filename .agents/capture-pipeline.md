@@ -23,9 +23,12 @@ when `--keep-app-running` is requested.
 
 ## Batch recording
 
-`capture-all` prepares an empty output directory, starts one discovery process,
-lists metadata, then closes the discovery controller and process. After
-preflight, it processes metadata in order:
+Current `capture-all` prepares an empty output directory, starts one discovery
+process, lists metadata, then closes the discovery controller and process. After
+preflight, it processes metadata in order. This is the current implementation,
+not the target architecture: discovery should be non-visible, and the runner
+should filter Cases before launching their execution processes. See
+[Architecture](../docs/architecture.md).
 
 ```text
 for each Scenario:
@@ -66,4 +69,5 @@ remove that incomplete output; successful finalize releases recorder ownership.
 The batch workflow owns `manifest.json`, writes it atomically after each state
 change, preflights IDs and filenames before recording, and stops at the first
 failure. Completed files remain; the failed file is marked failed and later
-entries remain pending. Manifest schema remains v1.
+entries remain pending. Recording manifests use schema v2; snapshot manifests
+use schema v3.

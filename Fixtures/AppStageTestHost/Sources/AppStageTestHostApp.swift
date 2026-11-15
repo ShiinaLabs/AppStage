@@ -165,6 +165,14 @@ private final class FixtureRuntime: StageScenarioControlling {
 
     func markUIReady() { isUIReady = true }
 
+    func loadCase(_ id: StageCaseID) async throws -> StageScenarioID {
+        guard id.rawValue == Self.scenarioID.rawValue else {
+            throw StageControlError.remoteFailure("Unknown fixture Case: \(id.rawValue)")
+        }
+        try await loadScenario(Self.scenarioID)
+        return Self.scenarioID
+    }
+
     func loadScenario(_ id: StageScenarioID) async throws {
         guard id == Self.scenarioID else { throw StageControlError.remoteFailure("Unknown fixture Scenario: \(id.rawValue)") }
         loaded = true
@@ -222,6 +230,15 @@ private final class FixtureRuntime: StageScenarioControlling {
 
     func performAction(_ action: StageAction) async throws {
         throw StageControlError.unsupported("Fixture Host has no semantic actions")
+    }
+
+    func availableCases() async -> [StageCaseMetadata] {
+        [StageCaseMetadata(
+            id: StageCaseID(Self.scenarioID.rawValue),
+            scenarioID: Self.scenarioID,
+            displayName: "Reliability Smoke",
+            capturePointIDs: [Self.summaryCapturePointID]
+        )]
     }
 
     func availableScenarios() async -> [StageScenarioMetadata] {

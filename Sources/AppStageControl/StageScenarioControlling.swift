@@ -18,25 +18,3 @@ public protocol StageScenarioControlling: Sendable {
     /// Called when the controller connection is lost so playback can stop safely.
     func controlDisconnected() async
 }
-
-public extension StageScenarioControlling {
-    func loadCase(_ id: StageCaseID) async throws -> StageScenarioID {
-        let scenarioID = StageScenarioID(id.rawValue)
-        guard await availableScenarios().contains(where: { $0.id == scenarioID }) else {
-            throw StageControlError.remoteFailure("Unknown Host case: \(id.rawValue)")
-        }
-        try await loadScenario(scenarioID)
-        return scenarioID
-    }
-
-    func availableCases() async -> [StageCaseMetadata] {
-        await availableScenarios().map { scenario in
-            StageCaseMetadata(
-                id: StageCaseID(scenario.id.rawValue),
-                scenarioID: scenario.id,
-                displayName: scenario.displayName,
-                capturePointIDs: scenario.capturePointIDs
-            )
-        }
-    }
-}

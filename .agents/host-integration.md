@@ -13,20 +13,23 @@ Use this checklist when adding AppStage to a macOS app.
 5. Ensure irrelevant live-environment gates cannot replace deterministic demo
    UI. Consider permissions, live hardware state, and network availability when
    the controlled provider already supplies a synthetic equivalent.
-6. Register Scenario metadata and implement load, prepare, play, pause, and
-   reset behavior as required by the Host's scripts.
-7. Advertise supported static capture points in Scenario metadata and implement
-   `prepareCapture(at:)` so it returns only when the requested visible result is
-   ready for capture.
+6. Register stable Cases and associate each with reusable Scenario behavior.
+   Implement load, prepare, play, pause, and reset for that behavior.
+7. For the current snapshot CLI, advertise static capture points in Scenario
+   metadata and make `prepareCapture(at:)` wait until the visible result is ready.
+   Treat this as a current adapter detail; the target model associates output
+   Artifacts with a Case rather than making capture points a separate Case kind.
 8. Make prepare wait for data/model readiness and, when needed, the first real
    interaction target in the Accessibility tree.
 9. Give interactive controls stable `accessibilityIdentifier` values and
    register identifier-based targets.
-10. Connect `StageControlClient` only after the controlled runtime and Host
-    window are ready.
+10. Connect `StageControlClient` after the controlled runtime is ready. Case
+    registration and discovery must not require a visible Host window; keep
+    window creation separate from registration and control startup.
 11. Give the controlled window a deterministic size and placement.
 12. Keep all Host navigation and domain behavior inside the Host. AppStage
-    should know only `StageScenarioID` and Scenario metadata.
+    should know stable Case and Scenario IDs plus their execution metadata, not
+    product routes, models, or content.
 
 ## Common pitfalls
 
